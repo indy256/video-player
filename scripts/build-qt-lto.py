@@ -163,6 +163,7 @@ def main():
                 options += [f"-DCMAKE_PROJECT_QtBase_INCLUDE={(SCRIPTS / 'qt-mingw-lto.cmake').as_posix()}"]
         if module == "qtmultimedia":
             options += [f"-DFFMPEG_DIR={sdk.as_posix()}", "-DQT_DEPLOY_FFMPEG=ON", "-DFEATURE_ffmpeg=ON",
+                        "-DFEATURE_spatialaudio=OFF",
                         "-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Qml=ON", "-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Quick=ON"]
         run("cmake", "-S", src, "-B", build, *options)
         cache = (build / "CMakeCache.txt").read_text()

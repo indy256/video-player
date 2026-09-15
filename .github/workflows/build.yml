@@ -116,7 +116,7 @@ jobs:
 
       - name: Restore Qt built with LTO
         id: qt-lto
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: .qt-lto
           key: qt-lto-${{ runner.os }}-${{ runner.arch }}-${{ matrix.qt-version }}-${{ steps.qt-toolchain.outputs.key }}-${{ hashFiles('scripts/build-qt-lto.py', 'scripts/qt-source-hashes.json', 'scripts/qt-mingw-lto.cmake') }}
@@ -135,6 +135,13 @@ jobs:
               '--toolchain', 'msvc' if os.name == 'nt' else 'native',
               '--arch', os.environ['RUNNER_ARCH'].lower(),
           ], check=True)
+
+      - name: Cache completed Qt source build
+        if: steps.qt-lto.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .qt-lto
+          key: ${{ steps.qt-lto.outputs.cache-primary-key }}
 
       - name: Select Qt built with LTO
         shell: python {0}
