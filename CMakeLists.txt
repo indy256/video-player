@@ -54,7 +54,7 @@ if(VIDEO_PLAYER_DEPLOY)
         install(FILES assets/app-icon.png DESTINATION share/icons/hicolor/512x512/apps RENAME video-player.png)
         # Include FFmpeg and the X11/GL client libraries even if found in system paths.
         # Never bundle glibc or a loader alongside the host's loader.
-        set(deploy_options POST_INCLUDE_REGEXES "/lib.*[.]so[.]"
+        set(deploy_options POST_INCLUDE_REGEXES "/lib.*[.]so([.]|$)"
             PRE_EXCLUDE_REGEXES "^ld-linux.*[.]so[.]")
         foreach(library IN ITEMS c m mvec pthread dl rt resolv util anl BrokenLocale thread_db)
             list(APPEND deploy_options "^lib${library}[.]so[.]")
