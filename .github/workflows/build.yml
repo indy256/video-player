@@ -23,7 +23,9 @@ jobs:
             qt-arch: linux_gcc_64
             artifact-path: dist/video-player-linux-x64.AppImage
           - os: windows-latest
-            qt-version: '6.11.2'
+            # aqt 3.3.0 cannot read Qt 6.11's reorganized windows_x86 repository.
+            # https://github.com/miurahr/aqtinstall/issues/1007
+            qt-version: '6.10.3'
             qt-host: windows
             qt-arch: win64_msvc2022_64
             msvc-arch: x64
