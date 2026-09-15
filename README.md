@@ -29,6 +29,8 @@ To build the single Windows executable locally, run `./build.ps1 -Portable -Test
 
 CI enables `VIDEO_PLAYER_DEPLOY` to install the runtime alongside the app. For example, configure with `-DVIDEO_PLAYER_DEPLOY=ON`, build, then run `cmake --install build --prefix package`. The regular local `build.ps1` remains available.
 
+Release and MinSizeRel builds enable link-time optimization (LTO), optimize for size, and discard unused code and data. Windows MSVC also folds identical code; GNU-linked executables are stripped. These settings apply to the player and portable launcher; prebuilt Qt and FFmpeg libraries are unchanged. Debug builds retain their normal settings. Configure with `-DVIDEO_PLAYER_OPTIMIZE_SIZE=OFF` to disable these optimizations (configure the portable launcher separately with the same option if needed).
+
 ## Resize diagnostic
 
 Run `build/player_tests.exe resizeDiagnostics -platform windows` with `VIDEO_PLAYER_RESIZE_BENCHMARK=1` and the Qt/MinGW DLL directories on PATH. This opt-in diagnostic repeats 60 growing and shrinking window sizes with no video, paused video, playing video, background erasing disabled, and the video surface hidden. It records time in resize calls, native video-window events, and background erasing. It opens a test window and generates its own clip.
