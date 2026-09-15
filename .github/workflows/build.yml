@@ -58,7 +58,7 @@ jobs:
             libxcb-render-util0-dev libxcb-shape0-dev libxcb-shm0-dev libxcb-sync-dev \
             libxcb-xfixes0-dev libxcb-xinerama0-dev libxcb-xkb-dev libxkbcommon-x11-dev \
             libfontconfig1-dev libfreetype6-dev libdbus-1-dev libpulse-dev libva-dev \
-            libdrm-dev libssl-dev libudev-dev
+            libdrm-dev libssl-dev libudev-dev libxext-dev libxrandr-dev
 
       - name: Set up MSVC
         if: runner.os == 'Windows'
