@@ -96,6 +96,18 @@ def ffmpeg_sdk(args):
             if not link.exists():
                 target = sorted(p.name for p in libraries if not p.is_symlink())[0]
                 link.symlink_to(target)
+            if sys.platform.startswith("linux"):
+                # Qt's FFmpeg binaries depend on Qt-built resolver stubs for
+                # VAAPI/OpenSSL. FindFFmpeg discovers them through Libs in .pc
+                # files, which the binary kit omits. Recover the dependencies
+                # from ELF so Qt rebuilds these resolver libraries with LTO too.
+                dynamic = run("readelf", "-d", link, capture=True)
+                stubs = sorted(set(re.findall(r"\[lib(Qt6FFmpegStub-[\w-]+)\.so\.", dynamic)))
+                pkgconfig = sdk / "lib/pkgconfig"
+                pkgconfig.mkdir(exist_ok=True)
+                (pkgconfig / f"lib{component}.pc").write_text(
+                    f"Name: lib{component}\nDescription: Qt FFmpeg runtime\nVersion: {version}\n"
+                    f"Libs: -l{component} " + " ".join(f"-l{stub}" for stub in stubs) + "\nLibs.private: \n")
     (sdk / "include/libavutil/avconfig.h").write_text(
         "#ifndef AVUTIL_AVCONFIG_H\n#define AVUTIL_AVCONFIG_H\n"
         "#define AV_HAVE_BIGENDIAN 0\n#define AV_HAVE_FAST_UNALIGNED 1\n#endif\n")
