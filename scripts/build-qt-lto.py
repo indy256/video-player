@@ -131,6 +131,7 @@ def main():
     args.seed, args.work, args.install = (p.resolve() for p in (args.seed, args.work, args.install))
     if args.install == args.seed:
         parser.error("The LTO installation must be separate from the seed kit")
+    (args.install / "lto-build.json").unlink(missing_ok=True)
     args.work.mkdir(parents=True, exist_ok=True)
     sdk = ffmpeg_sdk(args)
     # Avoid picking up prebuilt Qt libraries or plugins while building modules.
@@ -143,16 +144,23 @@ def main():
               "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON", "-DFEATURE_optimize_size=ON",
               "-DQT_BUILD_TESTS=OFF", "-DQT_BUILD_EXAMPLES=OFF", "-DQT_BUILD_BENCHMARKS=OFF",
               f"-DCMAKE_INSTALL_PREFIX={args.install.as_posix()}", f"-DCMAKE_PREFIX_PATH={args.install.as_posix()}"]
+    if sys.platform == "darwin":
+        # Match Qt's supported deployment baseline instead of inheriting the
+        # runner's OS version, where legacy capture APIs are already unavailable.
+        # CMake's IPO flags cover C/C++; include Qt's Objective-C sources too.
+        common += ["-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0", "-DCMAKE_OBJC_FLAGS=-flto=thin",
+                   "-DCMAKE_OBJCXX_FLAGS=-flto=thin"]
     if args.toolchain == "msvc":
         common += ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"]
     elif args.toolchain == "mingw":
+        avx_assembler = f'-Wa,"{(SCRIPTS / "qt-mingw-avx.s").as_posix()}"'
         common += ["-DCMAKE_C_COMPILER=gcc", "-DCMAKE_CXX_COMPILER=g++", "-DCMAKE_CXX_FLAGS=-fno-declone-ctor-dtor",
                    # Qt's top-level assembler workaround for GCC's Windows AVX
                    # stack alignment must be present in every generated function's
-                   # assembler unit. One LTO partition keeps them together.
-                   "-DCMAKE_EXE_LINKER_FLAGS=-flto-partition=one",
-                   "-DCMAKE_SHARED_LINKER_FLAGS=-flto-partition=one",
-                   "-DCMAKE_MODULE_LINKER_FLAGS=-flto-partition=one"]
+                   # assembler unit, including each separate LTO partition.
+                   f"-DCMAKE_EXE_LINKER_FLAGS={avx_assembler}",
+                   f"-DCMAKE_SHARED_LINKER_FLAGS={avx_assembler}",
+                   f"-DCMAKE_MODULE_LINKER_FLAGS={avx_assembler}"]
     records = {}
     for module, checksum in manifest.items():
         archive = f"{module}-everywhere-src-{args.version}.tar.xz"

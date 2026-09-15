@@ -119,7 +119,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .qt-lto
-          key: qt-lto-${{ runner.os }}-${{ runner.arch }}-${{ matrix.qt-version }}-${{ steps.qt-toolchain.outputs.key }}-${{ hashFiles('scripts/build-qt-lto.py', 'scripts/qt-source-hashes.json', 'scripts/qt-mingw-lto.cmake') }}
+          key: qt-lto-${{ runner.os }}-${{ runner.arch }}-${{ matrix.qt-version }}-${{ steps.qt-toolchain.outputs.key }}-${{ hashFiles('scripts/build-qt-lto.py', 'scripts/qt-source-hashes.json', 'scripts/qt-mingw-lto.cmake', 'scripts/qt-mingw-avx.s') }}
 
       - name: Build Qt modules with LTO
         if: steps.qt-lto.outputs.cache-hit != 'true'
