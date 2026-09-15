@@ -21,9 +21,11 @@ Tests require `ffmpeg` on PATH solely to generate an eight-second video with aud
 
 ## GitHub builds
 
-`.github/workflows/build.yml` runs on pushes, pull requests, and manual dispatch. It builds and tests Linux x64, Windows x64/ARM64, and macOS ARM64, then uploads an AppImage, Windows ZIPs, and a macOS DMG. Pushing a `v*` tag also creates or updates a GitHub release after all builds pass.
+`.github/workflows/build.yml` runs on pushes, pull requests, and manual dispatch. It builds and tests Linux x64, Windows x64/ARM64, and macOS ARM64, then uploads an AppImage, portable Windows executables, and a macOS DMG. Pushing a `v*` tag also creates or updates a GitHub release after all builds pass.
 
-Windows ZIPs include Qt/FFmpeg runtime DLLs; extract the whole archive and run `bin/VideoPlayer.exe`. This differs from image-viewer's static Windows executable. All platforms use Qt's FFmpeg backend, with deployment checks for the backend and runtime. The test-only FFmpeg executable generates fixtures and is not shipped with the app.
+Downloads include Qt, FFmpeg, and the compiler runtime; no separate installation of these is needed. Windows downloads are single `.exe` files: launch directly or pass a video filename. On first launch, a native launcher extracts the embedded runtime into `%LOCALAPPDATA%\VideoPlayer\Runtime\<content-hash>`; later launches reuse it. This is a self-extracting portable package, not a statically linked Qt build. The cache can be deleted when all players are closed. Linux uses an AppImage (Ubuntu 24.04 or newer compatible system); macOS ships a self-contained `.app` inside a DMG. Operating-system libraries and graphics drivers remain system requirements.
+
+To build the single Windows executable locally, run `./build.ps1 -Portable -Test`; the result is `dist/video-player-windows-x64.exe`. CI checks playback from this executable with only Windows system directories on PATH, including repeated and concurrent launches. `VideoPlayer --runtime-check <video>` is a headless decoding diagnostic that exits with zero after receiving a video frame and nonzero on failure. The test-only FFmpeg command-line executable generates fixtures and is not shipped with the app.
 
 CI enables `VIDEO_PLAYER_DEPLOY` to install the runtime alongside the app. For example, configure with `-DVIDEO_PLAYER_DEPLOY=ON`, build, then run `cmake --install build --prefix package`. The regular local `build.ps1` remains available.
 

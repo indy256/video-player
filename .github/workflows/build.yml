@@ -29,13 +29,13 @@ jobs:
             qt-host: windows
             qt-arch: win64_msvc2022_64
             msvc-arch: x64
-            artifact-path: dist/video-player-windows-x64.zip
+            artifact-path: dist/video-player-windows-x64.exe
           - os: windows-11-arm
             qt-version: '6.11.2'
             qt-host: windows_arm64
             qt-arch: win64_msvc2022_arm64
             msvc-arch: arm64
-            artifact-path: dist/video-player-windows-arm64.zip
+            artifact-path: dist/video-player-windows-arm64.exe
           - os: macos-latest
             qt-version: '6.11.2'
             qt-host: mac
@@ -124,7 +124,15 @@ jobs:
           if (-not $crt) { throw 'MSVC redistributable DLL directory not found' }
           Copy-Item (Join-Path $crt.FullName '*.dll') package/bin
           New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path package/* -DestinationPath $env:ARTIFACT_PATH
+          cmake -S packaging/windows -B build/portable -G Ninja -DCMAKE_BUILD_TYPE=Release "-DRUNTIME_DIR=$env:GITHUB_WORKSPACE/package"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/portable --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item build/portable/VideoPlayer.exe $env:ARTIFACT_PATH
+          $dependencies = & dumpbin /DEPENDENTS $env:ARTIFACT_PATH
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($dependencies -match '(?i)(Qt6|avcodec|avformat|VCRUNTIME|MSVCP|libgcc|libstdc\+\+)') { throw 'Portable launcher requires a non-system DLL' }
+          ./scripts/test-portable.ps1 -Executable $env:ARTIFACT_PATH
 
       - name: Package macOS application
         if: runner.os == 'macOS'
@@ -132,6 +140,9 @@ jobs:
           cmake --install build --config Release --prefix "$PWD/package"
           test -d package/VideoPlayer.app
           find package/VideoPlayer.app -iname '*ffmpeg*' | grep -q .
+          ffmpeg -v error -f lavfi -i 'testsrc2=size=160x90:rate=10' -t 1 -c:v mpeg4 -y build/runtime-check.mp4
+          env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u DYLD_LIBRARY_PATH \
+            PATH=/usr/bin:/bin package/VideoPlayer.app/Contents/MacOS/VideoPlayer --runtime-check build/runtime-check.mp4
           mkdir -p dist
           hdiutil create -volname 'Video Player' -srcfolder package -ov -format UDZO dist/video-player-macos-arm64.dmg
 
@@ -164,6 +175,10 @@ jobs:
           mkdir -p dist
           ./appimagetool.AppImage AppDir dist/video-player-linux-x64.AppImage
           chmod 755 dist/video-player-linux-x64.AppImage
+          ffmpeg -v error -f lavfi -i 'testsrc2=size=160x90:rate=10' -t 1 -c:v mpeg4 -y build/runtime-check.mp4
+          env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u LD_LIBRARY_PATH \
+            PATH=/usr/bin:/bin QT_QPA_PLATFORM=offscreen \
+            dist/video-player-linux-x64.AppImage --runtime-check build/runtime-check.mp4
 
       - name: Upload binary package
         uses: actions/upload-artifact@v7
