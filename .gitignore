@@ -2,6 +2,7 @@
 /dist/
 /package/
 /AppDir/
+/.qt-lto/
 /assets/app-icon.icns
 /CMakeUserPresets.json
 *.user

@@ -12,7 +12,7 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +52,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build ffmpeg xvfb xauth libopengl0 libglvnd0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-            libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
+            libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 \
+            libgl1-mesa-dev libegl1-mesa-dev libx11-xcb-dev libxcb-cursor-dev \
+            libxcb-icccm4-dev libxcb-image0-dev libxcb-keysyms1-dev libxcb-randr0-dev \
+            libxcb-render-util0-dev libxcb-shape0-dev libxcb-shm0-dev libxcb-sync-dev \
+            libxcb-xfixes0-dev libxcb-xinerama0-dev libxcb-xkb-dev libxkbcommon-x11-dev \
+            libfontconfig1-dev libfreetype6-dev libdbus-1-dev libpulse-dev libva-dev \
+            libdrm-dev libssl-dev libudev-dev
 
       - name: Set up MSVC
         if: runner.os == 'Windows'
@@ -89,10 +95,66 @@ jobs:
           done
           iconutil -c icns build/app-icon.iconset -o assets/app-icon.icns
 
+      - name: Install Python for Qt source builds
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Identify Qt toolchain
+        id: qt-toolchain
+        shell: python {0}
+        run: |
+          import hashlib, os, shutil, subprocess
+          compiler = shutil.which('cl' if os.name == 'nt' else 'c++')
+          with open(compiler, 'rb') as source:
+              identity = hashlib.file_digest(source, 'sha256').hexdigest()
+          identity += os.environ.get('VCToolsVersion', '') + os.environ.get('WindowsSDKVersion', '')
+          if os.environ['RUNNER_OS'] == 'macOS':
+              identity += subprocess.check_output(['xcrun', '--show-sdk-version'], text=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('key=' + hashlib.sha256(identity.encode()).hexdigest() + '\n')
+
+      - name: Restore Qt built with LTO
+        id: qt-lto
+        uses: actions/cache@v5
+        with:
+          path: .qt-lto
+          key: qt-lto-${{ runner.os }}-${{ runner.arch }}-${{ matrix.qt-version }}-${{ steps.qt-toolchain.outputs.key }}-${{ hashFiles('scripts/build-qt-lto.py', 'scripts/qt-source-hashes.json', 'scripts/qt-mingw-lto.cmake') }}
+
+      - name: Build Qt modules with LTO
+        if: steps.qt-lto.outputs.cache-hit != 'true'
+        shell: python {0}
+        env:
+          QT_SOURCE_VERSION: ${{ matrix.qt-version }}
+        run: |
+          import os, pathlib, subprocess, sys
+          subprocess.run([
+              sys.executable, 'scripts/build-qt-lto.py', '--version', os.environ['QT_SOURCE_VERSION'],
+              '--seed', os.environ['QT_ROOT_DIR'], '--work', os.environ['RUNNER_TEMP'] + '/qt-lto',
+              '--install', str(pathlib.Path('.qt-lto').resolve()), '--parallel', '2',
+              '--toolchain', 'msvc' if os.name == 'nt' else 'native',
+              '--arch', os.environ['RUNNER_ARCH'].lower(),
+          ], check=True)
+
+      - name: Select Qt built with LTO
+        shell: python {0}
+        run: |
+          import json, os, pathlib
+          root = pathlib.Path('.qt-lto').resolve()
+          manifest = json.loads((root / 'lto-build.json').read_text())
+          assert all(item['lto'] for item in manifest['modules'].values())
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              for key in ('QT_ROOT_DIR', 'QTDIR', 'CMAKE_PREFIX_PATH'):
+                  output.write(f'{key}={root.as_posix()}\n')
+              output.write(f'QT_PLUGIN_PATH={root.as_posix()}/plugins\n')
+          with open(os.environ['GITHUB_PATH'], 'a') as output:
+              output.write(str(root / 'bin') + '\n')
+
       - name: Configure
         shell: bash
         run: >-
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="$PWD/.qt-lto" -DVIDEO_PLAYER_REQUIRE_QT_LTO=ON
           -DBUILD_TESTING=ON -DVIDEO_PLAYER_DEPLOY=ON
 
       - name: Build

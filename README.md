@@ -29,7 +29,18 @@ To build the single Windows executable locally, run `./build.ps1 -Portable -Test
 
 CI enables `VIDEO_PLAYER_DEPLOY` to install the runtime alongside the app. For example, configure with `-DVIDEO_PLAYER_DEPLOY=ON`, build, then run `cmake --install build --prefix package`. The regular local `build.ps1` remains available.
 
-Release and MinSizeRel builds enable link-time optimization (LTO), optimize for size, and discard unused code and data. Windows MSVC also folds identical code; GNU-linked executables are stripped. These settings apply to the player and portable launcher; prebuilt Qt and FFmpeg libraries are unchanged. Debug builds retain their normal settings. Configure with `-DVIDEO_PLAYER_OPTIMIZE_SIZE=OFF` to disable these optimizations (configure the portable launcher separately with the same option if needed).
+Release and MinSizeRel builds enable link-time optimization (LTO), optimize for size, and discard unused code and data. Windows MSVC also folds identical code; GNU-linked executables are stripped. Debug builds retain their normal settings. Configure with `-DVIDEO_PLAYER_OPTIMIZE_SIZE=OFF` to disable these application optimizations (configure the portable launcher separately with the same option if needed).
+
+CI also builds Qt Base, Shader Tools, SVG, and Multimedia from checksum-pinned sources with Qt's LTO and size optimization options. The shared Qt libraries and plugins are optimized during their own links; LTO does not cross DLL/shared-library boundaries. FFmpeg binaries remain those supplied by the matching Qt kit. The source build checks Qt's LTCG feature and compiler flags, writes `lto-build.json`, and is cached by Qt version, architecture, compiler/SDK identity, and build scripts. Application configuration requires this verified kit in CI. The first uncached Qt build takes substantially longer.
+
+For a local MinGW Qt build, put Python 3.12+, CMake, Ninja, and the installed MinGW toolchain on PATH, then run:
+
+```powershell
+python scripts/build-qt-lto.py --seed C:/Qt/6.11.2/mingw_64 --work build/qt-lto-work --install .qt-lto --toolchain mingw --parallel 6
+powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -QtLto -Portable -Test
+```
+
+This creates a separate `.qt-lto` kit and `build/lto-player` build without modifying the installed Qt kit. MinGW uses targeted workarounds for GCC's Qt LTO issues: Windows platform plugins and a few accessibility/window translation units remain native code; other Qt modules use LTO. CI uses MSVC on Windows and does not need those exceptions. See [Qt's configure options](https://doc.qt.io/qt-6/configure-options.html) and [building Qt Multimedia](https://doc.qt.io/qt-6/qtmultimedia-building-from-source.html).
 
 ## Resize diagnostic
 

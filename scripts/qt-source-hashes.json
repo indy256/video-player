@@ -1,0 +1,20 @@
+{
+    "6.8.3":  {
+                  "qtbase":  "56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80",
+                  "qtshadertools":  "f6ec88bf42deba84d8f6b5d0914636ceed4749ccb51d1945b2f79b322b7ecf47",
+                  "qtsvg":  "35eb516460f00f264eb504baa253432384351cf23fb9980a5857190e8deef438",
+                  "qtmultimedia":  "32e82307d783172a3b984cc3c47c5e4e8b819cee3cbfc702c7012c47f15f6b01"
+              },
+    "6.10.3":  {
+                   "qtbase":  "383dc907816338f0cba72088a524c07458dfc69ce684ca9132fcc4fe91c24b0b",
+                   "qtshadertools":  "c75837e2ea493ec0b9747b227c455d4a12cafe90068abf607992da9a403616c6",
+                   "qtsvg":  "b3223fe005f6a4c7f21f34e4ee6ce0094737cff9503ba15bbb171ac18794f76d",
+                   "qtmultimedia":  "dd228fe54051e8834ca53e558794742c8814f217849f9dfa8f9a9df80441903a"
+               },
+    "6.11.2":  {
+                   "qtbase":  "5b2e00eccaf5a4d8c14134ffa0ea8dfd0a35ae1ffc7f8d87fa4305a1ed23cf22",
+                   "qtshadertools":  "805046b8b7757665586890b375940047e874ae3ab00adb6d3f2b38fc6b200b1c",
+                   "qtsvg":  "d594337feca84c26fb67fe87b85e6a5c12fda404b611d905f9d138210c311876",
+                   "qtmultimedia":  "967b5e02ec6b793cdb360622cd6e703132836af983208d678dae4b50f109cd9f"
+               }
+}
