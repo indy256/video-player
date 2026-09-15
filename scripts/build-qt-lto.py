@@ -146,7 +146,13 @@ def main():
     if args.toolchain == "msvc":
         common += ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"]
     elif args.toolchain == "mingw":
-        common += ["-DCMAKE_C_COMPILER=gcc", "-DCMAKE_CXX_COMPILER=g++", "-DCMAKE_CXX_FLAGS=-fno-declone-ctor-dtor"]
+        common += ["-DCMAKE_C_COMPILER=gcc", "-DCMAKE_CXX_COMPILER=g++", "-DCMAKE_CXX_FLAGS=-fno-declone-ctor-dtor",
+                   # Qt's top-level assembler workaround for GCC's Windows AVX
+                   # stack alignment must be present in every generated function's
+                   # assembler unit. One LTO partition keeps them together.
+                   "-DCMAKE_EXE_LINKER_FLAGS=-flto-partition=one",
+                   "-DCMAKE_SHARED_LINKER_FLAGS=-flto-partition=one",
+                   "-DCMAKE_MODULE_LINKER_FLAGS=-flto-partition=one"]
     records = {}
     for module, checksum in manifest.items():
         archive = f"{module}-everywhere-src-{args.version}.tar.xz"
@@ -158,6 +164,10 @@ def main():
         options = common.copy()
         if module == "qtbase":
             options += ["-DFEATURE_sql=OFF", "-DFEATURE_printsupport=OFF"]
+            if sys.platform.startswith("linux"):
+                # Desktop X11 playback does not need Qt Quick's embedded EGLFS
+                # screen-capture integration (an implicit dependency in Qt 6.8).
+                options += ["-DFEATURE_eglfs=OFF"]
             if args.toolchain == "mingw":
                 patch_mingw(src)
                 options += [f"-DCMAKE_PROJECT_QtBase_INCLUDE={(SCRIPTS / 'qt-mingw-lto.cmake').as_posix()}"]
