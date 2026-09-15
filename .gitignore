@@ -1,4 +1,7 @@
 /build/
 /dist/
+/package/
+/AppDir/
+/assets/app-icon.icns
 /CMakeUserPresets.json
 *.user

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Video Player
+Comment=Play local videos
+Exec=VideoPlayer %f
+Icon=video-player
+Terminal=false
+Categories=AudioVideo;Video;Player;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;

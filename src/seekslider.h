@@ -3,7 +3,7 @@
 #include <QSlider>
 #include <QStyleOptionSlider>
 
-// Absolute seeking on click; dragging previews a position and commits on release.
+// Absolute seeking on click and on every change of position while dragging.
 class SeekSlider : public QSlider {
     Q_OBJECT
 public:

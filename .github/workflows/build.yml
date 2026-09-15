@@ -1,0 +1,199 @@
+name: CMake build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            qt-version: '6.8.3'
+            qt-host: linux
+            qt-arch: linux_gcc_64
+            artifact-path: dist/video-player-linux-x64.AppImage
+          - os: windows-latest
+            qt-version: '6.11.2'
+            qt-host: windows
+            qt-arch: win64_msvc2022_64
+            msvc-arch: x64
+            artifact-path: dist/video-player-windows-x64.zip
+          - os: windows-11-arm
+            qt-version: '6.11.2'
+            qt-host: windows_arm64
+            qt-arch: win64_msvc2022_arm64
+            msvc-arch: arm64
+            artifact-path: dist/video-player-windows-arm64.zip
+          - os: macos-latest
+            qt-version: '6.11.2'
+            qt-host: mac
+            qt-arch: clang_64
+            artifact-path: dist/video-player-macos-arm64.dmg
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ffmpeg libopengl0 libglvnd0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup-msvc.ps1 -Architecture ${{ matrix.msvc-arch }}
+
+      - name: Install Qt and multimedia backend
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ matrix.qt-version }}
+          host: ${{ matrix.qt-host }}
+          arch: ${{ matrix.qt-arch }}
+          modules: qtmultimedia qtshadertools
+          cache: true
+
+      - name: Install Windows test fixture generator
+        if: runner.os == 'Windows'
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          # This CLI only generates test clips. Windows ARM64 can run it under emulation.
+          # The application's FFmpeg libraries come from the native Qt kit.
+          architecture: x64
+          linking-type: static
+
+      - name: Install macOS test tools and prepare icon
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja ffmpeg
+          mkdir -p build/app-icon.iconset
+          for size in 16 32 128 256 512; do
+            sips -z "$size" "$size" assets/app-icon.png --out "build/app-icon.iconset/icon_${size}x${size}.png" >/dev/null
+            double=$((size * 2))
+            sips -z "$double" "$double" assets/app-icon.png --out "build/app-icon.iconset/icon_${size}x${size}@2x.png" >/dev/null
+          done
+          iconutil -c icns build/app-icon.iconset -o assets/app-icon.icns
+
+      - name: Configure
+        shell: bash
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=ON -DVIDEO_PLAYER_DEPLOY=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Test playback, seeking, settings, and single-instance handoff
+        run: ctest --test-dir build -C Release --output-on-failure --timeout 120
+
+      - name: Package Windows application and runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARTIFACT_PATH: ${{ matrix.artifact-path }}
+        run: |
+          cmake --install build --config Release --prefix "$env:GITHUB_WORKSPACE/package"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = 'package/bin/VideoPlayer.exe'
+          $headers = & dumpbin /HEADERS $exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $machine = if ($env:RUNNER_ARCH -eq 'ARM64') { 'AA64' } else { '8664' }
+          if (-not ($headers -match "(?i)\b$machine machine")) { throw 'Wrong executable architecture' }
+          foreach ($pattern in @('package/bin/Qt6Multimedia.dll', 'package/bin/avcodec-*.dll', 'package/bin/avformat-*.dll')) {
+            if (-not (Test-Path $pattern)) { throw "Missing runtime: $pattern" }
+          }
+          if (-not (Get-ChildItem package -Recurse -Filter ffmpegmediaplugin.dll)) { throw 'Missing FFmpeg backend' }
+          # Ship the application-local MSVC runtime instead of requiring an installer.
+          $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x64' }
+          $crt = Get-ChildItem (Join-Path $env:VCToolsRedistDir $arch) -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
+          if (-not $crt) { throw 'MSVC redistributable DLL directory not found' }
+          Copy-Item (Join-Path $crt.FullName '*.dll') package/bin
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path package/* -DestinationPath $env:ARTIFACT_PATH
+
+      - name: Package macOS application
+        if: runner.os == 'macOS'
+        run: |
+          cmake --install build --config Release --prefix "$PWD/package"
+          test -d package/VideoPlayer.app
+          find package/VideoPlayer.app -iname '*ffmpeg*' | grep -q .
+          mkdir -p dist
+          hdiutil create -volname 'Video Player' -srcfolder package -ov -format UDZO dist/video-player-macos-arm64.dmg
+
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          ARCH: x86_64
+        run: |
+          cmake --install build --prefix "$PWD/AppDir/usr"
+          if find AppDir -name 'libc.so.*' -o -name 'ld-linux*.so.*' -o -name 'libpthread.so.*' | grep -q .; then
+            echo 'AppImage must use the host glibc and ELF loader'
+            exit 1
+          fi
+          test -n "$(find AppDir -name '*ffmpegmediaplugin.so' -print -quit)"
+          test -n "$(find AppDir -name 'libavcodec.so.*' -print -quit)"
+          while IFS= read -r -d '' binary; do
+            dependencies=$(LD_LIBRARY_PATH="$PWD/AppDir/usr/lib" ldd "$binary")
+            if [[ "$dependencies" == *'not found'* ]]; then
+              printf 'Unresolved dependencies in %s:\n%s\n' "$binary" "$dependencies"
+              exit 1
+            fi
+          done < <(find AppDir -type f \( -name '*.so' -o -name '*.so.*' -o -name VideoPlayer \) -print0)
+          cp packaging/AppRun AppDir/AppRun
+          cp packaging/video-player.desktop AppDir/
+          cp assets/app-icon.png AppDir/video-player.png
+          chmod +x AppDir/AppRun
+          curl -fL --retry 3 -o appimagetool.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool.AppImage
+          mkdir -p dist
+          ./appimagetool.AppImage AppDir dist/video-player-linux-x64.AppImage
+          chmod 755 dist/video-player-linux-x64.AppImage
+
+      - name: Upload binary package
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ matrix.artifact-path }}
+          archive: false
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: video-player-*
+          path: dist
+          merge-multiple: true
+          skip-decompress: true
+
+      - name: Create release and upload packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes
+          fi
