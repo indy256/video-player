@@ -50,7 +50,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build ffmpeg libopengl0 libglvnd0 \
+          sudo apt-get install -y ninja-build ffmpeg xvfb xauth libopengl0 libglvnd0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
             libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
 
@@ -176,8 +176,8 @@ jobs:
           ./appimagetool.AppImage AppDir dist/video-player-linux-x64.AppImage
           chmod 755 dist/video-player-linux-x64.AppImage
           ffmpeg -v error -f lavfi -i 'testsrc2=size=160x90:rate=10' -t 1 -c:v mpeg4 -y build/runtime-check.mp4
-          env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u LD_LIBRARY_PATH \
-            PATH=/usr/bin:/bin QT_QPA_PLATFORM=offscreen \
+          xvfb-run -a env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u LD_LIBRARY_PATH \
+            PATH=/usr/bin:/bin QT_QPA_PLATFORM=xcb \
             dist/video-player-linux-x64.AppImage --runtime-check build/runtime-check.mp4
 
       - name: Upload binary package
