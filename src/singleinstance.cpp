@@ -12,10 +12,9 @@
 #endif
 
 SingleInstance::SingleInstance(const QString &name, QObject *parent)
-    : QObject(parent), name(name), lock(std::make_unique<QLockFile>(
-          QDir::temp().filePath(name + ".lock"))) {
+    : QObject(parent), name(name), lock(QDir::temp().filePath(name + ".lock")) {
     // A live player may run indefinitely; only reclaim locks from dead processes.
-    lock->setStaleLockTime(0);
+    lock.setStaleLockTime(0);
     server.setSocketOptions(QLocalServer::UserAccessOption);
     connect(&server, &QLocalServer::newConnection, this, [this] {
         while (auto *socket = server.nextPendingConnection()) {
@@ -47,14 +46,14 @@ SingleInstance::Result SingleInstance::start(const QString &file) {
     QElapsedTimer deadline;
     deadline.start();
     while (deadline.elapsed() < 5000) {
-        if (lock->tryLock()) {
+        if (lock.tryLock()) {
             QLocalServer::removeServer(name);
             if (server.listen(name)) return Result::Primary;
             error = server.errorString();
-            lock->unlock();
+            lock.unlock();
             return Result::Failed;
         }
-        if (lock->error() != QLockFile::LockFailedError) {
+        if (lock.error() != QLockFile::LockFailedError) {
             error = "Cannot create the player instance lock.";
             return Result::Failed;
         }

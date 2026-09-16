@@ -6,7 +6,6 @@ param(
     [switch]$QtLto
 )
 $ErrorActionPreference = 'Stop'
-$env:PATH = "$QtRoot\bin;$ToolsRoot\mingw1310_64\bin;$env:PATH"
 $cmake = Join-Path $ToolsRoot 'CMake_64\bin\cmake.exe'
 $buildDir = Join-Path $PSScriptRoot 'build'
 if ($QtLto) {
@@ -14,8 +13,8 @@ if ($QtLto) {
     if (-not (Test-Path "$QtRoot/lto-build.json")) { throw 'Build the LTO Qt kit with scripts/build-qt-lto.py first (see README).' }
     # CMake caches Qt component paths; use a separate build to avoid mixing kits.
     $buildDir = Join-Path $PSScriptRoot 'build/lto-player'
-    $env:PATH = "$QtRoot/bin;$env:PATH"
 }
+$env:PATH = "$QtRoot\bin;$ToolsRoot\mingw1310_64\bin;$env:PATH"
 $requireQtLto = if ($QtLto) { 'ON' } else { 'OFF' }
 & $cmake -S $PSScriptRoot -B $buildDir -G Ninja "-DCMAKE_PREFIX_PATH=$QtRoot" "-DCMAKE_MAKE_PROGRAM=$ToolsRoot/Ninja/ninja.exe" "-DCMAKE_CXX_COMPILER=$ToolsRoot/mingw1310_64/bin/g++.exe" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON "-DVIDEO_PLAYER_REQUIRE_QT_LTO=$requireQtLto"
 if ($LASTEXITCODE -ne 0) { throw 'Configure failed' }

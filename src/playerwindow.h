@@ -27,6 +27,8 @@ protected:
 private:
     void savePosition();
     void restorePosition();
+    bool playbackReady() const;
+    void toggleFullscreen();
     void updateFullscreen();
     void chooseFile();
     void togglePlayback();
@@ -49,7 +51,6 @@ private:
     QPoint dragStartMouse;
     QPoint dragStartWindow;
     bool frameReady = false;
-    bool scrubbing = false;
     QString positionKey;
     qint64 pendingPosition = -1;
 };

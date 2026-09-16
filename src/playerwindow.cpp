@@ -155,16 +155,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         settings.setValue("audio/volume", value);
         settings.sync();
     });
-    connect(timeline, &QSlider::sliderPressed, this, [this] {
-        scrubbing = true;
-    });
-    connect(timeline, &QSlider::valueChanged, this, [this] {
-        seekToSlider();
-    });
-    connect(timeline, &QSlider::sliderReleased, this, [this] {
-        scrubbing = false;
-        updateTimeline();
-    });
+    connect(timeline, &QSlider::valueChanged, this, &PlayerWindow::seekToSlider);
+    connect(timeline, &QSlider::sliderReleased, this, &PlayerWindow::updateTimeline);
     connect(player, &QMediaPlayer::positionChanged, this, &PlayerWindow::updateTimeline);
     connect(player, &QMediaPlayer::durationChanged, this, [this] { updateControls(); updateTimeline(); });
     connect(player, &QMediaPlayer::seekableChanged, this, &PlayerWindow::updateControls);
@@ -173,20 +165,20 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(player, &QMediaPlayer::mediaStatusChanged, this, &PlayerWindow::restorePosition);
     connect(player, &QMediaPlayer::seekableChanged, this, &PlayerWindow::restorePosition);
     connect(player, &QMediaPlayer::durationChanged, this, &PlayerWindow::restorePosition);
-    connect(player, &QMediaPlayer::hasVideoChanged, this, [this] { updateFullscreen(); });
-    connect(player, &QMediaPlayer::errorOccurred, this, [this] { updateControls(); });
+    connect(player, &QMediaPlayer::hasVideoChanged, this, &PlayerWindow::updateFullscreen);
+    connect(player, &QMediaPlayer::errorOccurred, this, &PlayerWindow::updateControls);
     auto shortcut = [this](const QKeySequence &key, auto callback) {
         auto *action = new QShortcut(key, this); connect(action, &QShortcut::activated, this, callback);
     };
-    shortcut(QKeySequence::Open, [this] { chooseFile(); });
-    shortcut(QKeySequence(Qt::Key_Space), [this] { togglePlayback(); });
+    shortcut(QKeySequence::Open, &PlayerWindow::chooseFile);
+    shortcut(QKeySequence(Qt::Key_Space), &PlayerWindow::togglePlayback);
     shortcut(QKeySequence(Qt::Key_Left), [this] { skip(-10000); });
     shortcut(QKeySequence(Qt::Key_Right), [this] { skip(10000); });
     shortcut(QKeySequence(Qt::Key_Up), [this] { adjustVolume(1); });
     shortcut(QKeySequence(Qt::Key_Down), [this] { adjustVolume(-1); });
-    shortcut(QKeySequence(Qt::Key_F11), [this] { isFullScreen() ? showNormal() : showFullScreen(); });
-    shortcut(QKeySequence(Qt::Key_F), [this] { isFullScreen() ? showNormal() : showFullScreen(); });
-    shortcut(QKeySequence(Qt::Key_Escape), [this] { close(); });
+    shortcut(QKeySequence(Qt::Key_F11), &PlayerWindow::toggleFullscreen);
+    shortcut(QKeySequence(Qt::Key_F), &PlayerWindow::toggleFullscreen);
+    shortcut(QKeySequence(Qt::Key_Escape), &PlayerWindow::close);
     updateControls();
     updateTimeline();
 #ifdef Q_OS_WIN
@@ -228,7 +220,6 @@ void PlayerWindow::openFile(const QString &path) {
     }
     savePosition();
     pendingPosition = -1;
-    scrubbing = false;
     clickTimer->stop();
     timeline->setSliderDown(false);
     player->stop();
@@ -261,7 +252,7 @@ void PlayerWindow::restorePosition() {
         || player->mediaStatus() == QMediaPlayer::LoadingMedia
         || player->mediaStatus() == QMediaPlayer::NoMedia
         || player->error() != QMediaPlayer::NoError) return;
-    const qint64 position = pendingPosition < player->duration() ? qMax(qint64(0), pendingPosition) : 0;
+    const qint64 position = pendingPosition < player->duration() ? pendingPosition : 0;
     pendingPosition = -1;
     player->setPosition(position);
 }
@@ -272,19 +263,25 @@ void PlayerWindow::closeEvent(QCloseEvent *event) {
     QMainWindow::closeEvent(event);
 }
 
+bool PlayerWindow::playbackReady() const {
+    const auto status = player->mediaStatus();
+    return !player->source().isEmpty() && player->error() == QMediaPlayer::NoError
+        && status != QMediaPlayer::LoadingMedia && status != QMediaPlayer::InvalidMedia;
+}
+
 void PlayerWindow::togglePlayback() {
     clickTimer->stop();
-    const auto status = player->mediaStatus();
-    if (player->source().isEmpty() || player->error() != QMediaPlayer::NoError
-        || status == QMediaPlayer::LoadingMedia || status == QMediaPlayer::InvalidMedia) return;
+    if (!playbackReady()) return;
     if (player->isPlaying()) player->pause();
-    else { if (player->mediaStatus() == QMediaPlayer::EndOfMedia) player->setPosition(0); player->play(); }
+    else {
+        if (player->mediaStatus() == QMediaPlayer::EndOfMedia) player->setPosition(0);
+        player->play();
+    }
 }
 
 void PlayerWindow::updateControls() {
     const auto status = player->mediaStatus();
-    const bool ready = !player->source().isEmpty() && player->error() == QMediaPlayer::NoError
-        && status != QMediaPlayer::LoadingMedia && status != QMediaPlayer::InvalidMedia;
+    const bool ready = playbackReady();
     const bool seekable = ready && player->isSeekable() && player->duration() > 0;
     timeline->setEnabled(seekable);
     if (player->error() != QMediaPlayer::NoError) {
@@ -322,7 +319,7 @@ bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
             if (event->type() == QEvent::MouseButtonDblClick) {
                 mousePressed = draggingWindow = false;
                 clickTimer->stop();
-                isFullScreen() ? showNormal() : showFullScreen();
+                toggleFullscreen();
             } else if (event->type() == QEvent::MouseButtonPress) {
                 mousePressed = true;
                 draggingWindow = false;
@@ -345,7 +342,7 @@ bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
 }
 
 void PlayerWindow::adjustVolume(int steps) {
-    volume->setValue(qBound(0, volume->value() + steps * 5, 100));
+    volume->setValue(volume->value() + steps * volume->singleStep());
 }
 
 void PlayerWindow::wheelEvent(QWheelEvent *event) {
@@ -363,6 +360,11 @@ void PlayerWindow::wheelEvent(QWheelEvent *event) {
 void PlayerWindow::changeEvent(QEvent *event) {
     QMainWindow::changeEvent(event);
     if (event->type() == QEvent::WindowStateChange) updateFullscreen();
+}
+
+void PlayerWindow::toggleFullscreen() {
+    if (isFullScreen()) showNormal();
+    else showFullScreen();
 }
 
 void PlayerWindow::updateFullscreen() {
@@ -387,13 +389,15 @@ void PlayerWindow::updateFullscreen() {
 void PlayerWindow::updateTimeline() {
     const qint64 duration = player->duration();
     qint64 position = player->position();
-    if (scrubbing) position = qRound64(timeline->value() * (double(duration) / timelineSteps));
+    if (timeline->isSliderDown()) position = qRound64(timeline->value() * (double(duration) / timelineSteps));
     else {
         const QSignalBlocker blocker(timeline);
         timeline->setValue(duration > 0 ? qRound(position * (double(timelineSteps) / duration)) : 0);
     }
-    timeline->setToolTip(timestamp(position) + " / " + timestamp(duration));
-    timeline->setAccessibleDescription("Position " + timestamp(position) + " of " + timestamp(duration));
+    const QString positionText = timestamp(position);
+    const QString durationText = timestamp(duration);
+    timeline->setToolTip(positionText + " / " + durationText);
+    timeline->setAccessibleDescription("Position " + positionText + " of " + durationText);
     if (duration > 0) {
         timeline->setSingleStep(qMax(1, qRound(5000.0 * timelineSteps / duration)));
         timeline->setPageStep(qMax(1, qRound(30000.0 * timelineSteps / duration)));

@@ -1,7 +1,6 @@
 #pragma once
 #include <QLocalServer>
 #include <QLockFile>
-#include <memory>
 
 class SingleInstance : public QObject {
     Q_OBJECT
@@ -15,6 +14,6 @@ signals:
 private:
     QString name;
     QString error;
-    std::unique_ptr<QLockFile> lock;
+    QLockFile lock;
     QLocalServer server;
 };
