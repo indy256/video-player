@@ -60,9 +60,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     auto *layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 12);
     layout->setSpacing(16);
-    auto *openButton = new QPushButton("Open video");
-    openButton->setObjectName("primary");
-    openButton->setToolTip("Open a video (Ctrl+O)");
     stage = new QStackedWidget;
     auto *empty = new QWidget;
     empty->installEventFilter(this);
@@ -118,7 +115,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     timeline->setToolTip("Click or drag to seek");
     layout->addWidget(timeline);
     auto *controls = new QHBoxLayout;
-    controls->addWidget(openButton);
     controls->addStretch();
     volume = new QSlider(Qt::Horizontal);
     volume->setObjectName("volume");
@@ -139,8 +135,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QPushButton:hover { background: #33415b; }
         QPushButton:focus { border-color: #94b4ff; }
         QPushButton:disabled { color: #596173; background: #1b202c; border-color: #252c39; }
-        QPushButton#primary { background: #759eff; color: #0d1830; font-weight: 600; }
-        QPushButton#primary:hover { background: #9bb8ff; }
         QSlider::groove:horizontal { background: #2b3243; height: 5px; border-radius: 2px; }
         QSlider::sub-page:horizontal { background: #759eff; border-radius: 2px; }
         QSlider::handle:horizontal { background: #e5edff; width: 14px; margin: -5px 0; border-radius: 7px; }
@@ -154,7 +148,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QMenu::item:selected { background: #33415b; }
         QMenu::item:disabled { color: #596173; }
     )");
-    connect(openButton, &QPushButton::clicked, this, &PlayerWindow::chooseFile);
     connect(emptyOpen, &QPushButton::clicked, this, &PlayerWindow::chooseFile);
     connect(volume, &QSlider::valueChanged, this, [this](int value) {
         audio->setVolume(value / 100.f);

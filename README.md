@@ -62,7 +62,7 @@ Playback position is saved per file when you close the app (including Escape) or
 
 | Control | Action |
 | --- | --- |
-| Open video / Ctrl+O | Choose a local file |
+| Right-click → Open video / Ctrl+O | Choose a local file |
 | Space | Play or pause |
 | Left-click video | After release, play or pause once the system double-click interval expires, only if no drag occurred |
 | Double-click video | Toggle fullscreen without briefly pausing or resuming playback |
@@ -74,4 +74,4 @@ Playback position is saved per file when you close the app (including Escape) or
 | F / F11 | Toggle video-only fullscreen (controls hidden, cursor visible) |
 | Escape | Close the app |
 
-During dragging, each movement seeks immediately and playback continues from the latest selected position. Releasing does not seek again or change play/pause state. Seeking is disabled for media that does not support it. Format support depends on the installed FFmpeg build. Errors appear in the video area. The whole video fits inside the window without cropping or stretching, with black bars when needed, including fullscreen. The bottom contains only the seek slider, Open button, and volume slider.
+During dragging, each movement seeks immediately and playback continues from the latest selected position. Releasing does not seek again or change play/pause state. Seeking is disabled for media that does not support it. Format support depends on the installed FFmpeg build. Errors appear in the video area. The whole video fits inside the window without cropping or stretching, with black bars when needed, including fullscreen. The bottom contains only the seek slider and volume slider.
