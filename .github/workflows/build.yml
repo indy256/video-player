@@ -30,7 +30,7 @@ jobs:
             qt-arch: win64_msvc2022_64
             msvc-arch: x64
             artifact-path: dist/video-player-windows-x64.exe
-          - os: windows-11-arm
+          - os: windows-11-vs2026-arm
             qt-version: '6.11.2'
             qt-host: windows_arm64
             qt-arch: win64_msvc2022_arm64
@@ -76,12 +76,8 @@ jobs:
 
       - name: Install Windows test fixture generator
         if: runner.os == 'Windows'
-        uses: FedericoCarboni/setup-ffmpeg@v3
-        with:
-          # This CLI only generates test clips. Windows ARM64 can run it under emulation.
-          # The application's FFmpeg libraries come from the native Qt kit.
-          architecture: x64
-          linking-type: static
+        shell: pwsh
+        run: ./scripts/setup-ffmpeg.ps1
 
       - name: Install macOS test tools and prepare icon
         if: runner.os == 'macOS'
