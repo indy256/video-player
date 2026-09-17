@@ -21,7 +21,7 @@ jobs:
             qt-version: '6.8.3'
             qt-host: linux
             qt-arch: linux_gcc_64
-            artifact-path: dist/video-player-linux-x64.AppImage
+            artifact-path: dist/vp-linux-x64.AppImage
           - os: windows-latest
             # aqt 3.3.0 cannot read Qt 6.11's reorganized windows_x86 repository.
             # https://github.com/miurahr/aqtinstall/issues/1007
@@ -29,18 +29,18 @@ jobs:
             qt-host: windows
             qt-arch: win64_msvc2022_64
             msvc-arch: x64
-            artifact-path: dist/video-player-windows-x64.exe
+            artifact-path: dist/vp-windows-x64.exe
           - os: windows-11-vs2026-arm
             qt-version: '6.11.2'
             qt-host: windows_arm64
             qt-arch: win64_msvc2022_arm64
             msvc-arch: arm64
-            artifact-path: dist/video-player-windows-arm64.exe
+            artifact-path: dist/vp-windows-arm64.exe
           - os: macos-latest
             qt-version: '6.11.2'
             qt-host: mac
             qt-arch: clang_64
-            artifact-path: dist/video-player-macos-arm64.dmg
+            artifact-path: dist/vp-macos-arm64.dmg
 
     steps:
       - name: Check out source
@@ -209,7 +209,7 @@ jobs:
           env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u DYLD_LIBRARY_PATH \
             PATH=/usr/bin:/bin package/VideoPlayer.app/Contents/MacOS/VideoPlayer --runtime-check build/runtime-check.mp4
           mkdir -p dist
-          hdiutil create -volname 'Video Player' -srcfolder package -ov -format UDZO dist/video-player-macos-arm64.dmg
+          hdiutil create -volname 'Video Player' -srcfolder package -ov -format UDZO dist/vp-macos-arm64.dmg
 
       - name: Build Linux AppImage
         if: runner.os == 'Linux'
@@ -238,12 +238,12 @@ jobs:
           curl -fL --retry 3 -o appimagetool.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool.AppImage
           mkdir -p dist
-          ./appimagetool.AppImage AppDir dist/video-player-linux-x64.AppImage
-          chmod 755 dist/video-player-linux-x64.AppImage
+          ./appimagetool.AppImage AppDir dist/vp-linux-x64.AppImage
+          chmod 755 dist/vp-linux-x64.AppImage
           ffmpeg -v error -f lavfi -i 'testsrc2=size=160x90:rate=10' -t 1 -c:v mpeg4 -y build/runtime-check.mp4
           xvfb-run -a env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u LD_LIBRARY_PATH \
             PATH=/usr/bin:/bin QT_QPA_PLATFORM=xcb \
-            dist/video-player-linux-x64.AppImage --runtime-check build/runtime-check.mp4
+            dist/vp-linux-x64.AppImage --runtime-check build/runtime-check.mp4
 
       - name: Upload binary package
         uses: actions/upload-artifact@v7
@@ -263,7 +263,7 @@ jobs:
       - name: Download packages
         uses: actions/download-artifact@v8
         with:
-          pattern: video-player-*
+          pattern: vp-*
           path: dist
           merge-multiple: true
           skip-decompress: true

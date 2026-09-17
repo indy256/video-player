@@ -42,7 +42,7 @@ if ($Portable) {
     if ($LASTEXITCODE -ne 0) { throw 'Portable configuration failed' }
     & $cmake --build "$buildDir/portable" --parallel
     if ($LASTEXITCODE -ne 0) { throw 'Portable build failed' }
-    $portableExe = Join-Path $distDir 'video-player-windows-x64.exe'
+    $portableExe = Join-Path $distDir 'vp-windows-x64.exe'
     Copy-Item -LiteralPath "$buildDir/portable/VideoPlayer.exe" -Destination $portableExe -Force
     if ($Test) { & "$PSScriptRoot/scripts/test-portable.ps1" -Executable $portableExe }
     Write-Host "Self-contained player ready: $portableExe"

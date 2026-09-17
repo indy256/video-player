@@ -13,7 +13,7 @@ class UpdaterTests : public QObject {
     Q_OBJECT
 private slots:
     void releaseValidation() {
-        const QString name = "video-player-windows-x64.exe";
+        const QString name = "vp-windows-x64.exe";
         const QString url = "https://github.com/indy256/video-player/releases/download/v1.2/" + name;
         const QJsonObject valid{{"name", name.toUpper()}, {"size", 123},
             {"digest", "sha256:" + QString(64, 'a')}, {"browser_download_url", url}};
@@ -24,7 +24,7 @@ private slots:
         QVERIFY(AppUpdate::releaseAsset(release(valid), name, asset));
         QCOMPARE(asset.size, 123);
         QCOMPARE(asset.sha256, QByteArray(64, 'a'));
-        QVERIFY(!AppUpdate::releaseAsset(release(valid), "video-player-windows-arm64.exe", asset));
+        QVERIFY(!AppUpdate::releaseAsset(release(valid), "vp-windows-arm64.exe", asset));
         for (const QString &badUrl : {"http://github.com/indy256/video-player/releases/download/v1.2/app.exe",
                 "https://example.com/indy256/video-player/releases/download/v1.2/app.exe",
                 "https://github.com/other/repo/releases/download/v1.2/app.exe",

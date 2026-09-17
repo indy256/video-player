@@ -135,19 +135,19 @@ bool AppUpdate::installLatest(QWidget *parent, const QString &videoPath) {
     QString name;
 #if defined(Q_OS_WIN)
 #if defined(Q_PROCESSOR_X86_64)
-    name = "video-player-windows-x64.exe";
+    name = "vp-windows-x64.exe";
 #elif defined(Q_PROCESSOR_ARM_64)
-    name = "video-player-windows-arm64.exe";
+    name = "vp-windows-arm64.exe";
 #endif
     const QString launcher = qEnvironmentVariable("VIDEO_PLAYER_LAUNCHER");
     if (!launcher.isEmpty()) target = QFileInfo(launcher).canonicalFilePath();
 #elif defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)
-    name = "video-player-linux-x64.AppImage";
+    name = "vp-linux-x64.AppImage";
     target = QFileInfo(qEnvironmentVariable("APPIMAGE")).canonicalFilePath();
     if (qEnvironmentVariableIsEmpty("APPIMAGE"))
         return fail("Run the AppImage release to update automatically.");
 #elif defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)
-    name = "video-player-macos-arm64.dmg";
+    name = "vp-macos-arm64.dmg";
     QDir bundle(QCoreApplication::applicationDirPath());
     if (!bundle.cdUp() || !bundle.cdUp() || !bundle.dirName().endsWith(".app"))
         return fail("Run the installed VideoPlayer.app to update automatically.");
