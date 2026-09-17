@@ -8,6 +8,7 @@ class QAudioOutput;
 class SeekSlider;
 class QTimer;
 class QSlider;
+class QContextMenuEvent;
 
 class PlayerWindow : public QMainWindow {
     Q_OBJECT
@@ -15,6 +16,7 @@ public:
     explicit PlayerWindow(QWidget *parent = nullptr);
     void openFile(const QString &path);
 protected:
+    void contextMenuEvent(QContextMenuEvent *event) override;
 #ifdef Q_OS_WIN
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
 #endif
@@ -31,6 +33,7 @@ private:
     void toggleFullscreen();
     void updateFullscreen();
     void chooseFile();
+    void showPopupMenu(const QPoint &position);
     void togglePlayback();
     void updateControls();
     void updateTimeline();
@@ -51,6 +54,7 @@ private:
     QPoint dragStartMouse;
     QPoint dragStartWindow;
     bool frameReady = false;
+    bool updating = false;
     QString positionKey;
     qint64 pendingPosition = -1;
 };

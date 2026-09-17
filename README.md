@@ -2,6 +2,8 @@
 
 A single-window C++17 / Qt Widgets video player with a dark interface, aspect-ratio-preserving video, audio, keyboard play/pause and replay, volume control, fullscreen, and a seek slider. Open a local file or drop it onto the window.
 
+Right-click for playback commands, fullscreen, and **Update to latest version**. Updating downloads the matching asset from the latest GitHub release, verifies its size and SHA-256 checksum, replaces the app, and restarts with the current video at its saved position. Downloads can be canceled before installation. The application folder must be writable. Windows updates the portable launcher (or replaces a standalone local build with the portable release); Linux requires the AppImage; macOS requires the installed `VideoPlayer.app`. Diagnostic logs remain in a `.video-player-update-*` folder beside the app; macOS also retains the previous bundle there.
+
 Video decoding, demuxing, seeking, and audio synchronization use FFmpeg shared libraries through **Qt Multimedia's FFmpeg backend**. The app explicitly selects this backend; it does not launch the FFmpeg command-line program or directly call libavcodec. See [Qt's backend documentation](https://doc.qt.io/qt-6/qtmultimedia-index.html).
 
 ## Build and run on this machine

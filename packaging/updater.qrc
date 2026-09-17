@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/updates">
+    <file>update-windows.ps1</file>
+    <file>update-unix.sh</file>
+  </qresource>
+</RCC>

@@ -17,6 +17,10 @@ if(VIDEO_PLAYER_OPTIMIZE_SIZE)
         else()
             string(REGEX REPLACE "(^| )-O[0123sz]( |$)" " " CMAKE_CXX_FLAGS_${config} "${CMAKE_CXX_FLAGS_${config}}")
             string(APPEND CMAKE_CXX_FLAGS_${config} " -Os -ffunction-sections -fdata-sections")
+            if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+                # GCC's constructor decloning can crash during LTO of Qt callers.
+                string(APPEND CMAKE_CXX_FLAGS_${config} " -fno-declone-ctor-dtor")
+            endif()
         endif()
     endforeach()
 

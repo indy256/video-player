@@ -112,6 +112,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         STARTUPINFOW startup{};
         startup.cb = sizeof(startup);
         PROCESS_INFORMATION process{};
+        std::vector<wchar_t> launcherPath(32768);
+        const DWORD launcherLength = GetModuleFileNameW(nullptr, launcherPath.data(), static_cast<DWORD>(launcherPath.size()));
+        require(launcherLength > 0 && launcherLength < launcherPath.size(), "Cannot locate portable launcher");
+        require(SetEnvironmentVariableW(L"VIDEO_PLAYER_LAUNCHER", launcherPath.data()), "Cannot pass portable launcher path");
         // Inherit the caller's working directory so relative video filenames still work.
         require(CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE,
                                0, nullptr, nullptr, &startup, &process), "Cannot start Video Player");

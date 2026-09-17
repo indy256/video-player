@@ -1,5 +1,8 @@
 #include "playerwindow.h"
 #include "seekslider.h"
+#include "updater.h"
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QAudioOutput>
 #include <QApplication>
 #include <QTimer>
@@ -146,6 +149,10 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QSlider#timeline::sub-page:horizontal { height: 14px; margin: 0; border-radius: 0; }
         QSlider#timeline::handle:horizontal { margin: 0; }
         QToolTip { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; }
+        QMenu { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; padding: 4px; }
+        QMenu::item { padding: 7px 24px; }
+        QMenu::item:selected { background: #33415b; }
+        QMenu::item:disabled { color: #596173; }
     )");
     connect(openButton, &QPushButton::clicked, this, &PlayerWindow::chooseFile);
     connect(emptyOpen, &QPushButton::clicked, this, &PlayerWindow::chooseFile);
@@ -210,6 +217,35 @@ void PlayerWindow::chooseFile() {
     const QString path = QFileDialog::getOpenFileName(this, "Open video", {},
         "Video files (*.mp4 *.mkv *.avi *.mov *.webm *.m4v *.wmv *.mpeg *.mpg *.ts *.m2ts *.ogv);;All files (*)");
     if (!path.isEmpty()) openFile(path);
+}
+
+void PlayerWindow::contextMenuEvent(QContextMenuEvent *event) {
+    showPopupMenu(event->globalPos());
+    event->accept();
+}
+
+void PlayerWindow::showPopupMenu(const QPoint &position) {
+    clickTimer->stop();
+    QMenu menu(this);
+    menu.addAction("Open video", this, &PlayerWindow::chooseFile);
+    auto *play = menu.addAction(player->isPlaying() ? "Pause" : "Play", this, &PlayerWindow::togglePlayback);
+    play->setEnabled(playbackReady());
+    menu.addAction(isFullScreen() ? "Leave fullscreen" : "Fullscreen", this, &PlayerWindow::toggleFullscreen);
+    menu.addSeparator();
+    auto *update = menu.addAction("Update to latest version", this, [this] {
+        if (updating) return;
+        updating = true;
+        const bool installed = AppUpdate::installLatest(this, player->source().toLocalFile());
+        updating = false;
+        if (installed) {
+            savePosition();
+            QApplication::quit();
+        }
+    });
+    update->setEnabled(!updating);
+    menu.addSeparator();
+    menu.addAction("Exit", this, &PlayerWindow::close);
+    menu.exec(position);
 }
 
 void PlayerWindow::openFile(const QString &path) {
@@ -295,6 +331,11 @@ void PlayerWindow::updateControls() {
 }
 
 bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (event->type() == QEvent::ContextMenu) {
+        const auto *context = static_cast<QContextMenuEvent *>(event);
+        showPopupMenu(context->globalPos());
+        return true;
+    }
     if ((watched == video || watched == timeline || watched == volume) && event->type() == QEvent::Wheel) {
         wheelEvent(static_cast<QWheelEvent *>(event));
         return true;

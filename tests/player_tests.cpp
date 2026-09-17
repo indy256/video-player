@@ -15,6 +15,9 @@
 #include <QStackedWidget>
 #include <QAudioOutput>
 #include <QWheelEvent>
+#include <QContextMenuEvent>
+#include <QMenu>
+#include <QTimer>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -80,6 +83,26 @@ private slots:
         QVERIFY(!window.findChild<SeekSlider *>("timeline")->isEnabled());
         window.openFile(temp.filePath("missing.mp4"));
         QVERIFY(window.findChild<QLabel *>("status")->text().startsWith("Cannot open file:"));
+    }
+    void popupMenu() {
+        PlayerWindow window;
+        window.show();
+        for (QWidget *surface : {static_cast<QWidget *>(&window),
+                window.findChild<QWidget *>("emptyStage"),
+                static_cast<QWidget *>(window.findChild<QVideoWidget *>())}) {
+            bool found = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto *menu = window.findChild<QMenu *>();
+                if (menu) {
+                    for (auto *action : menu->actions())
+                        if (action->text() == "Update to latest version") found = action->isEnabled();
+                    menu->close();
+                }
+            });
+            QContextMenuEvent event(QContextMenuEvent::Mouse, QPoint(10, 10), surface->mapToGlobal(QPoint(10, 10)));
+            QApplication::sendEvent(surface, &event);
+            QVERIFY(found);
+        }
     }
     void nativeStartupBackground() {
 #ifdef Q_OS_WIN
