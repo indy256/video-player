@@ -17,6 +17,7 @@ int main(int argc, char *argv[]) {
     qputenv("QT_MEDIA_BACKEND", "ffmpeg");
     QApplication app(argc, argv);
     app.setApplicationName("Video Player");
+    app.setApplicationVersion(QStringLiteral(VIDEO_PLAYER_VERSION));
     app.setWindowIcon(QIcon(":/assets/app-icon.png"));
     app.setOrganizationName("LocalApps");
     // Exercise the deployed platform plugin and FFmpeg decoder without opening a

@@ -155,10 +155,13 @@ jobs:
 
       - name: Configure
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: >-
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_PREFIX_PATH="$PWD/.qt-lto" -DVIDEO_PLAYER_REQUIRE_QT_LTO=ON
           -DBUILD_TESTING=ON -DVIDEO_PLAYER_DEPLOY=ON
+          -DVIDEO_PLAYER_VERSION="$RELEASE_VERSION"
 
       - name: Build
         run: cmake --build build --config Release --parallel 2

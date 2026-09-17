@@ -45,7 +45,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     blackPalette.setColor(QPalette::Base, Qt::black);
     setPalette(blackPalette);
     setAutoFillBackground(true);
-    setWindowTitle("Video Player");
+    setWindowTitle(QStringLiteral("Video Player v" VIDEO_PLAYER_VERSION));
     resize(1100, 740);
     setMinimumSize(680, 440);
     setAcceptDrops(true);
@@ -268,7 +268,7 @@ void PlayerWindow::openFile(const QString &path) {
         identity.toUtf8(), QCryptographicHash::Sha256).toHex());
     pendingPosition = QSettings().value(positionKey, 0).toLongLong();
     stage->setCurrentIndex(2);
-    setWindowTitle(file.fileName() + " - Video Player");
+    setWindowTitle(file.fileName() + QStringLiteral(" - Video Player v" VIDEO_PLAYER_VERSION));
     player->setSource(QUrl::fromLocalFile(file.absoluteFilePath()));
     restorePosition();
     player->play();
