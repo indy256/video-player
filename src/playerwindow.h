@@ -46,11 +46,13 @@ private:
     QVideoWidget *video;
     QStackedWidget *stage;
     QLabel *statusLabel;
+    QLabel *timeLabel;
     SeekSlider *timeline;
     QTimer *clickTimer;
     QSlider *volume;
     QWidget *controlsPanel;
     QTimer *controlsTimer;
+    QByteArray windowedGeometry;
     int wheelRemainder = 0;
     bool mousePressed = false;
     bool draggingWindow = false;

@@ -15,6 +15,7 @@
 #include <QFileInfo>
 #include <QEvent>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QLabel>
 #include <QMimeData>
 #include <QMouseEvent>
@@ -110,17 +111,22 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     layout->addWidget(stage, 1);
     timeline = new SeekSlider;
     timeline->setObjectName("timeline");
-    timeline->setFixedHeight(14);
     timeline->setAccessibleName("Video position");
     timeline->setRange(0, timelineSteps);
     timeline->setToolTip("Click or drag to seek");
     controlsPanel = new QWidget(page);
     controlsPanel->setObjectName("controlsPanel");
     controlsPanel->setAttribute(Qt::WA_ShowWithoutActivating);
-    auto *controls = new QHBoxLayout(controlsPanel);
+    auto *controls = new QGridLayout(controlsPanel);
     controls->setContentsMargins(0, 0, 0, 0);
-    controls->setSpacing(16);
-    controls->addWidget(timeline, 1, Qt::AlignVCenter);
+    controls->setHorizontalSpacing(16);
+    controls->setVerticalSpacing(4);
+    controls->setColumnStretch(0, 1);
+    controls->addWidget(timeline, 0, 0, Qt::AlignVCenter);
+    timeLabel = new QLabel;
+    timeLabel->setObjectName("timeReadout");
+    timeLabel->setAccessibleName("Current and total time");
+    controls->addWidget(timeLabel, 1, 0);
     volume = new QSlider(Qt::Horizontal);
     volume->setObjectName("volume");
     volume->setSingleStep(5);
@@ -130,7 +136,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     volume->setRange(0, 100);
     volume->setValue(savedVolume);
     volume->setFixedWidth(100);
-    controls->addWidget(volume, 0, Qt::AlignVCenter);
+    controls->addWidget(volume, 0, 1, Qt::AlignVCenter);
     layout->addWidget(controlsPanel);
     // Poll only in fullscreen: native video surfaces do not always forward mouse moves.
     controlsTimer = new QTimer(this);
@@ -148,9 +154,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QSlider::sub-page:horizontal { background: #759eff; border-radius: 2px; }
         QSlider::handle:horizontal { background: #e5edff; width: 14px; margin: -5px 0; border-radius: 7px; }
         QSlider:disabled::sub-page:horizontal { background: #2b3243; }
-        QSlider#timeline::groove:horizontal { height: 14px; margin: 0; border-radius: 0; }
-        QSlider#timeline::sub-page:horizontal { height: 14px; margin: 0; border-radius: 0; }
-        QSlider#timeline::handle:horizontal { margin: 0; }
         QToolTip { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; }
         QMenu { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; padding: 4px; }
         QMenu::item { padding: 7px 24px; }
@@ -407,8 +410,15 @@ void PlayerWindow::changeEvent(QEvent *event) {
 }
 
 void PlayerWindow::toggleFullscreen() {
-    if (isFullScreen()) showNormal();
-    else showFullScreen();
+    if (isFullScreen()) {
+        showNormal();
+        // Restore after the controls have returned to the windowed layout.
+        centralWidget()->layout()->activate();
+        if (!windowedGeometry.isEmpty()) restoreGeometry(windowedGeometry);
+    } else {
+        windowedGeometry = saveGeometry();
+        showFullScreen();
+    }
 }
 
 void PlayerWindow::updateFullscreen() {
@@ -463,6 +473,7 @@ void PlayerWindow::updateTimeline() {
     }
     const QString positionText = timestamp(position);
     const QString durationText = timestamp(duration);
+    timeLabel->setText(" " + positionText + " / " + durationText);
     timeline->setToolTip(positionText + " / " + durationText);
     timeline->setAccessibleDescription("Position " + positionText + " of " + durationText);
     if (duration > 0) {
@@ -473,6 +484,7 @@ void PlayerWindow::updateTimeline() {
 
 void PlayerWindow::seekToSlider() {
     if (player->isSeekable()) player->setPosition(qRound64(timeline->value() * (double(player->duration()) / timelineSteps)));
+    updateTimeline();
 }
 
 void PlayerWindow::skip(qint64 delta) {

@@ -349,12 +349,14 @@ private slots:
     }
     void mousePlaybackAndFullscreen() {
         PlayerWindow window;
+        window.setGeometry(40, 50, 720, 480);
         window.show();
         window.openFile(clip);
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
         auto *video = window.findChild<QVideoWidget *>();
         auto *slider = window.findChild<SeekSlider *>("timeline");
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && video->isVisible(), 10000);
+        const QRect windowedGeometry = window.geometry();
         QTest::mousePress(video, Qt::LeftButton);
         QCOMPARE(player->playbackState(), QMediaPlayer::PlayingState);
         QTest::mouseRelease(video, Qt::LeftButton);
@@ -379,7 +381,17 @@ private slots:
         doubleClick();
         QVERIFY(!window.isFullScreen());
         QVERIFY(slider->isVisible());
+        QTRY_COMPARE(window.geometry(), windowedGeometry);
         QCOMPARE(player->playbackState(), QMediaPlayer::PlayingState);
+        window.showMaximized();
+        QTRY_VERIFY(window.isMaximized());
+        doubleClick();
+        QVERIFY(window.isFullScreen());
+        doubleClick();
+        QVERIFY(!window.isFullScreen());
+        QTRY_VERIFY(window.isMaximized());
+        window.showNormal();
+        QTRY_COMPARE(window.geometry(), windowedGeometry);
     }
     void positionSurvivesClosing() {
         {
