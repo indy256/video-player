@@ -113,9 +113,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     timeline->setAccessibleName("Video position");
     timeline->setRange(0, timelineSteps);
     timeline->setToolTip("Click or drag to seek");
-    layout->addWidget(timeline);
     auto *controls = new QHBoxLayout;
-    controls->addStretch();
+    controls->addWidget(timeline, 1, Qt::AlignVCenter);
     volume = new QSlider(Qt::Horizontal);
     volume->setObjectName("volume");
     volume->setSingleStep(5);
@@ -125,7 +124,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     volume->setRange(0, 100);
     volume->setValue(savedVolume);
     volume->setFixedWidth(100);
-    controls->addWidget(volume);
+    controls->addWidget(volume, 0, Qt::AlignVCenter);
     layout->addLayout(controls);
     setStyleSheet(R"(
         QMainWindow, QWidget { background: #000000; color: #939eb4; font-family: 'Segoe UI'; font-size: 13px; }
