@@ -2,6 +2,7 @@
 #include "seekslider.h"
 #include "updater.h"
 #include <QContextMenuEvent>
+#include <QCursor>
 #include <QMenu>
 #include <QAudioOutput>
 #include <QApplication>
@@ -113,7 +114,12 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     timeline->setAccessibleName("Video position");
     timeline->setRange(0, timelineSteps);
     timeline->setToolTip("Click or drag to seek");
-    auto *controls = new QHBoxLayout;
+    controlsPanel = new QWidget(page);
+    controlsPanel->setObjectName("controlsPanel");
+    controlsPanel->setAttribute(Qt::WA_ShowWithoutActivating);
+    auto *controls = new QHBoxLayout(controlsPanel);
+    controls->setContentsMargins(0, 0, 0, 0);
+    controls->setSpacing(16);
     controls->addWidget(timeline, 1, Qt::AlignVCenter);
     volume = new QSlider(Qt::Horizontal);
     volume->setObjectName("volume");
@@ -125,7 +131,11 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     volume->setValue(savedVolume);
     volume->setFixedWidth(100);
     controls->addWidget(volume, 0, Qt::AlignVCenter);
-    layout->addLayout(controls);
+    layout->addWidget(controlsPanel);
+    // Poll only in fullscreen: native video surfaces do not always forward mouse moves.
+    controlsTimer = new QTimer(this);
+    controlsTimer->setInterval(100);
+    connect(controlsTimer, &QTimer::timeout, this, &PlayerWindow::updateFullscreenControls);
     setStyleSheet(R"(
         QMainWindow, QWidget { background: #000000; color: #939eb4; font-family: 'Segoe UI'; font-size: 13px; }
         QWidget#emptyStage { background: #000000; border: 1px solid #252b3a; border-radius: 12px; }
@@ -287,6 +297,7 @@ void PlayerWindow::restorePosition() {
 
 void PlayerWindow::closeEvent(QCloseEvent *event) {
     clickTimer->stop();
+    controlsTimer->stop();
     savePosition();
     QMainWindow::closeEvent(event);
 }
@@ -403,20 +414,43 @@ void PlayerWindow::toggleFullscreen() {
 void PlayerWindow::updateFullscreen() {
     const bool fullscreen = isFullScreen();
     auto *layout = centralWidget()->layout();
-    // Walk the page layout only, preserving the video widget and its parent.
-    const auto setControlsVisible = [this, fullscreen](auto &&self, QLayout *items) -> void {
-        for (int i = 0; i < items->count(); ++i) {
-            auto *item = items->itemAt(i);
-            if (auto *widget = item->widget(); widget && widget != stage)
-                widget->setVisible(!fullscreen);
-            if (auto *childLayout = item->layout()) self(self, childLayout);
+    if (fullscreen) {
+        layout->removeWidget(controlsPanel);
+        if (!controlsPanel->isWindow()) {
+            // A separate owned window stays above the native video surface on Windows.
+            controlsPanel->setParent(this, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
+            controlsPanel->hide();
         }
-    };
-    setControlsVisible(setControlsVisible, layout);
+        controlsTimer->start();
+    } else {
+        controlsTimer->stop();
+        if (controlsPanel->isWindow()) controlsPanel->setParent(centralWidget(), Qt::Widget);
+        if (layout->indexOf(controlsPanel) < 0) layout->addWidget(controlsPanel);
+        controlsPanel->show();
+    }
+    controlsPanel->layout()->setContentsMargins(fullscreen ? QMargins(12, 12, 12, 12) : QMargins());
     layout->setContentsMargins(fullscreen ? QMargins() : QMargins(0, 0, 0, 12));
     layout->setSpacing(fullscreen ? 0 : 16);
     const bool showMedia = fullscreen || (!player->source().isEmpty() && player->error() == QMediaPlayer::NoError);
     stage->setCurrentIndex(showMedia ? (frameReady ? 1 : 2) : 0);
+}
+
+void PlayerWindow::updateFullscreenControls() {
+    if (!isFullScreen()) return;
+    if (!isVisible() || isMinimized()) {
+        controlsPanel->hide();
+        return;
+    }
+    const int panelHeight = controlsPanel->sizeHint().height();
+    const QPoint panelPosition = centralWidget()->mapToGlobal(QPoint(0, centralWidget()->height() - panelHeight));
+    controlsPanel->setGeometry(QRect(panelPosition, QSize(centralWidget()->width(), panelHeight)));
+    const QPoint cursor = centralWidget()->mapFromGlobal(QCursor::pos());
+    const bool inside = centralWidget()->rect().contains(cursor);
+    const bool atBottom = inside && cursor.y() >= centralWidget()->height() - 6;
+    const bool overControls = inside && controlsPanel->isVisible()
+        && controlsPanel->geometry().contains(QCursor::pos());
+    controlsPanel->setVisible(atBottom || overControls || timeline->isSliderDown() || volume->isSliderDown());
+    if (controlsPanel->isVisible()) controlsPanel->raise();
 }
 
 void PlayerWindow::updateTimeline() {

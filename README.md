@@ -71,7 +71,7 @@ Playback position is saved per file when you close the app (including Escape) or
 | Left / Right | Skip backward / forward 10 seconds |
 | Volume slider | Adjust audio; set to zero to silence |
 | Mouse wheel / Up / Down | Increase or decrease volume in 5% steps, including fullscreen |
-| F / F11 | Toggle video-only fullscreen (controls hidden, cursor visible) |
+| F / F11 | Toggle fullscreen (move the mouse to the bottom edge to reveal the sliders) |
 | Escape | Close the app |
 
 During dragging, each movement seeks immediately and playback continues from the latest selected position. Releasing does not seek again or change play/pause state. Seeking is disabled for media that does not support it. Format support depends on the installed FFmpeg build. Errors appear in the video area. The whole video fits inside the window without cropping or stretching, with black bars when needed, including fullscreen. The bottom contains only the seek slider and volume slider.

@@ -16,6 +16,7 @@
 #include <QAudioOutput>
 #include <QWheelEvent>
 #include <QContextMenuEvent>
+#include <QCursor>
 #include <QMenu>
 #include <QTimer>
 #ifdef Q_OS_WIN
@@ -310,6 +311,41 @@ private slots:
             QVERIFY(qAbs(reopened.findChild<QAudioOutput *>()->volume() - saved / 100.f) < 0.001f);
         }
         QSettings().remove("audio/volume");
+    }
+    void fullscreenControlsAtBottom() {
+        PlayerWindow window;
+        window.openFile(clip);
+        window.showFullScreen();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *video = window.findChild<QVideoWidget *>();
+        QTRY_VERIFY_WITH_TIMEOUT(video->isVisible(), 10000);
+        auto *panel = window.findChild<QWidget *>("controlsPanel");
+        auto *volume = window.findChild<QSlider *>("volume");
+        const QPoint savedCursor = QCursor::pos();
+        QCursor::setPos(window.mapToGlobal(window.rect().center()));
+        QTRY_VERIFY(!panel->isVisible());
+        const QRect videoGeometry(video->mapToGlobal(QPoint()), video->size());
+        QCursor::setPos(window.mapToGlobal(QPoint(window.width() / 2, window.height() - 1)));
+        QTRY_VERIFY(panel->isVisible());
+        QCursor::setPos(volume->mapToGlobal(volume->rect().center()));
+        QTest::qWait(150);
+        QVERIFY(panel->isVisible());
+        QCOMPARE(QRect(video->mapToGlobal(QPoint()), video->size()), videoGeometry);
+        QVERIFY(panel->isWindow());
+        QCOMPARE(panel->geometry().bottom(), window.centralWidget()->mapToGlobal(
+            window.centralWidget()->rect().bottomLeft()).y());
+        volume->setSliderDown(true);
+        QCursor::setPos(window.mapToGlobal(window.rect().center()));
+        QTest::qWait(150);
+        QVERIFY(panel->isVisible());
+        volume->setSliderDown(false);
+        QTRY_VERIFY(!panel->isVisible());
+        QCOMPARE(QRect(video->mapToGlobal(QPoint()), video->size()), videoGeometry);
+        window.showNormal();
+        QTRY_VERIFY(panel->isVisible());
+        QVERIFY(!panel->isWindow());
+        QTRY_VERIFY(panel->y() >= video->mapTo(window.centralWidget(), QPoint(0, video->height())).y());
+        QCursor::setPos(savedCursor);
     }
     void mousePlaybackAndFullscreen() {
         PlayerWindow window;

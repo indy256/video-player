@@ -32,6 +32,7 @@ private:
     bool playbackReady() const;
     void toggleFullscreen();
     void updateFullscreen();
+    void updateFullscreenControls();
     void chooseFile();
     void showPopupMenu(const QPoint &position);
     void togglePlayback();
@@ -48,6 +49,8 @@ private:
     SeekSlider *timeline;
     QTimer *clickTimer;
     QSlider *volume;
+    QWidget *controlsPanel;
+    QTimer *controlsTimer;
     int wheelRemainder = 0;
     bool mousePressed = false;
     bool draggingWindow = false;
