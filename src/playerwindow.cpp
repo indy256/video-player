@@ -159,7 +159,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     timeLabel->setObjectName("timeReadout");
     timeLabel->setAccessibleName("Current and total time");
     controls->addWidget(timeLabel, 1, 0);
-    volume = new QSlider(Qt::Horizontal);
+    volume = new SeekSlider;
     volume->setObjectName("volume");
     volume->setSingleStep(5);
     volume->installEventFilter(this);
@@ -172,7 +172,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     auto *volumeLabel = new QLabel(QString("Volume %1").arg(savedVolume));
     volumeLabel->setObjectName("volumeReadout");
     controls->addWidget(volumeLabel, 1, 1);
-    gamma = new QSlider(Qt::Horizontal);
+    gamma = new SeekSlider;
     gamma->setObjectName("gamma");
     gamma->setAccessibleName("Gamma");
     gamma->setRange(1, 40);
