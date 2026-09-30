@@ -51,6 +51,7 @@ private:
     SeekSlider *timeline;
     QTimer *clickTimer;
     QSlider *volume;
+    QSlider *gamma = nullptr;
     QWidget *controlsPanel;
     QAbstractButton *fullscreenClose;
     QTimer *controlsTimer;

@@ -1,5 +1,6 @@
 #include "playerwindow.h"
 #include "seekslider.h"
+#include "gammafilter.h"
 #include <QApplication>
 #include <QAbstractButton>
 #include <QFile>
@@ -313,6 +314,85 @@ private slots:
         }
         QSettings().remove("audio/volume");
     }
+    void gammaPixels() {
+        QVideoSink output;
+        GammaFilter filter(&output);
+        QVideoFrame frame(QVideoFrameFormat(QSize(3, 1), QVideoFrameFormat::Format_RGBA8888));
+        QVERIFY(frame.map(QVideoFrame::WriteOnly));
+        const uchar pixels[] = {0, 0, 0, 255, 64, 128, 192, 255, 255, 255, 255, 255};
+        std::copy(std::begin(pixels), std::end(pixels), frame.bits(0));
+        frame.unmap();
+        frame.setStartTime(123000);
+        frame.setEndTime(163000);
+        frame.setMirrored(true);
+        filter.input()->setVideoFrame(frame);
+        QCOMPARE(output.videoFrame(), frame);
+        const QImage original = frame.toImage();
+        filter.setGamma(20);
+        const QVideoFrame bright = output.videoFrame();
+        const QImage image = bright.toImage();
+        QCOMPARE(image.pixelColor(0, 0), QColor(Qt::black));
+        QCOMPARE(image.pixelColor(2, 0), QColor(Qt::white));
+        const QColor middle = image.pixelColor(1, 0);
+        QVERIFY(qAbs(middle.red() - 128) <= 1);
+        QVERIFY(qAbs(middle.green() - 181) <= 1);
+        QVERIFY(qAbs(middle.blue() - 221) <= 1);
+        QCOMPARE(bright.startTime(), frame.startTime());
+        QCOMPARE(bright.endTime(), frame.endTime());
+        QCOMPARE(bright.mirrored(), frame.mirrored());
+        QCOMPARE(frame.toImage(), original);
+        filter.setGamma(5);
+        QVERIFY(output.videoFrame().toImage().pixelColor(1, 0).red() < 64);
+        filter.setGamma(10);
+        QCOMPARE(output.videoFrame(), frame);
+        filter.setGamma(20);
+        QCOMPARE(output.videoFrame().toImage(), image);
+        filter.input()->setVideoFrame({});
+        QVERIFY(!output.videoFrame().isValid());
+    }
+    void gammaPlayback() {
+        PlayerWindow window;
+        window.show();
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *video = window.findChild<QVideoWidget *>();
+        auto *gamma = window.findChild<QSlider *>("gamma");
+        auto *volume = window.findChild<QSlider *>("volume");
+        QVERIFY(gamma);
+        QCOMPARE(gamma->value(), 10);
+        QCOMPARE(player->videoSink(), video->videoSink());
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && video->isVisible(), 10000);
+        player->pause();
+        QTest::qWait(100);
+        const QImage original = video->videoSink()->videoFrame().toImage();
+        const qint64 position = player->position();
+        const int initialVolume = volume->value();
+        gamma->setValue(20);
+        QVERIFY(player->videoSink() != video->videoSink());
+        auto *filterInput = player->videoSink();
+        QVERIFY(video->videoSink()->videoFrame().toImage() != original);
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QCOMPARE(player->position(), position);
+        QCOMPARE(volume->value(), initialVolume);
+        QCOMPARE(window.findChild<QLabel *>("gammaReadout")->text(), QString("Gamma 2.0"));
+        QTest::mouseDClick(gamma, Qt::LeftButton);
+        QTest::mouseRelease(gamma, Qt::LeftButton);
+        QCOMPARE(gamma->value(), 10);
+        QCOMPARE(player->videoSink(), video->videoSink());
+        QVERIFY(!filterInput->videoFrame().isValid());
+        QCOMPARE(video->videoSink()->videoFrame().toImage(), original);
+        gamma->setValue(15);
+        QCOMPARE(player->videoSink(), filterInput);
+        player->play();
+        QTRY_VERIFY(player->position() > position + 300);
+        QVERIFY(video->videoSink()->videoFrame().isValid());
+        gamma->setValue(10);
+        QCOMPARE(player->videoSink(), video->videoSink());
+        const qint64 resetPosition = player->position();
+        QTRY_VERIFY(player->position() > resetPosition + 300);
+        QVERIFY(video->videoSink()->videoFrame().isValid());
+        QVERIFY(!filterInput->videoFrame().isValid());
+    }
     void fullscreenControlsAtBottom() {
         PlayerWindow window;
         window.openFile(clip);
@@ -340,6 +420,15 @@ private slots:
         QTest::qWait(150);
         QVERIFY(panel->isVisible());
         volume->setSliderDown(false);
+        QTRY_VERIFY(!panel->isVisible());
+        auto *gamma = window.findChild<QSlider *>("gamma");
+        QCursor::setPos(window.mapToGlobal(QPoint(window.width() / 2, window.height() - 1)));
+        QTRY_VERIFY(gamma->isVisible());
+        gamma->setSliderDown(true);
+        QCursor::setPos(window.mapToGlobal(window.rect().center()));
+        QTest::qWait(150);
+        QVERIFY(panel->isVisible());
+        gamma->setSliderDown(false);
         QTRY_VERIFY(!panel->isVisible());
         QCOMPARE(QRect(video->mapToGlobal(QPoint()), video->size()), videoGeometry);
         window.showNormal();

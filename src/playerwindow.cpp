@@ -1,6 +1,7 @@
 #include "playerwindow.h"
 #include "seekslider.h"
 #include "updater.h"
+#include "gammafilter.h"
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QMenu>
@@ -137,6 +138,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
             updateFullscreen();
         }
     });
+    auto *gammaFilter = new GammaFilter(video->videoSink(), this);
     player->setVideoOutput(video);
     layout->addWidget(stage, 1);
     timeline = new SeekSlider;
@@ -167,6 +169,48 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     volume->setValue(savedVolume);
     volume->setFixedWidth(100);
     controls->addWidget(volume, 0, 1, Qt::AlignVCenter);
+    gamma = new QSlider(Qt::Horizontal);
+    gamma->setObjectName("gamma");
+    gamma->setAccessibleName("Gamma");
+    gamma->setRange(1, 40);
+    gamma->setValue(10);
+    gamma->setPageStep(5);
+    gamma->setFixedWidth(100);
+    gamma->installEventFilter(this);
+    auto *gammaLabel = new QLabel("Gamma 1.0");
+    gammaLabel->setObjectName("gammaReadout");
+    gamma->setToolTip("Gamma 1.0 (double-click to reset)");
+    controls->addWidget(gamma, 0, 2, Qt::AlignVCenter);
+    controls->addWidget(gammaLabel, 1, 2);
+    connect(gamma, &QSlider::valueChanged, this, [gammaFilter, gammaLabel, this](int value) {
+        const QString text = QString("Gamma %1").arg(value / 10.0, 0, 'f', 1);
+        gammaLabel->setText(text);
+        gamma->setToolTip(text + " (double-click to reset)");
+        auto *input = gammaFilter->input();
+        auto *output = video->videoSink();
+        if (value == 10) {
+            const QVideoFrame original = input->videoFrame();
+            const QString subtitle = input->subtitleText();
+            gammaFilter->setGamma(10);
+            // Disconnect the filter completely at neutral gamma, restoring native rendering.
+            const QSignalBlocker blocker(input);
+            player->setVideoOutput(video);
+            input->setVideoFrame({});
+            output->setVideoFrame(original);
+            output->setSubtitleText(subtitle);
+            return;
+        }
+        if (player->videoSink() != input) {
+            // Seed the filter with the unmodified frame so paused playback updates immediately.
+            const QVideoFrame original = output->videoFrame();
+            const QString subtitle = output->subtitleText();
+            const QSignalBlocker blocker(input);
+            player->setVideoSink(input);
+            input->setVideoFrame(original);
+            input->setSubtitleText(subtitle);
+        }
+        gammaFilter->setGamma(value);
+    });
     layout->addWidget(controlsPanel);
     fullscreenClose = new FullscreenCloseButton(this);
     fullscreenClose->setObjectName("fullscreenClose");
@@ -371,6 +415,11 @@ void PlayerWindow::updateControls() {
 }
 
 bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == gamma && event->type() == QEvent::MouseButtonDblClick
+        && static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton) {
+        gamma->setValue(10);
+        return true;
+    }
     if (event->type() == QEvent::ContextMenu) {
         const auto *context = static_cast<QContextMenuEvent *>(event);
         showPopupMenu(context->globalPos());
@@ -502,7 +551,8 @@ void PlayerWindow::updateFullscreenControls() {
     const bool atBottom = inside && cursor.y() >= centralWidget()->height() - 6;
     const bool overControls = inside && controlsPanel->isVisible()
         && controlsPanel->geometry().contains(QCursor::pos());
-    controlsPanel->setVisible(atBottom || overControls || timeline->isSliderDown() || volume->isSliderDown());
+    controlsPanel->setVisible(atBottom || overControls || timeline->isSliderDown()
+        || volume->isSliderDown() || gamma->isSliderDown());
     if (controlsPanel->isVisible()) controlsPanel->raise();
 }
 
