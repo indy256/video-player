@@ -314,6 +314,62 @@ private slots:
         }
         QSettings().remove("audio/volume");
     }
+    void perVideoSettingsPersist() {
+        const QString first = temp.filePath("settings first.mp4");
+        const QString second = temp.filePath("settings second.mp4");
+        QVERIFY(QFile::copy(clip, first));
+        QVERIFY(QFile::copy(clip, second));
+        {
+            PlayerWindow window;
+            auto *volume = window.findChild<QSlider *>("volume");
+            auto *gamma = window.findChild<QSlider *>("gamma");
+            window.openFile(first);
+            volume->setValue(0);
+            gamma->setValue(23);
+            window.openFile(second);
+            QCOMPARE(gamma->value(), 10);
+            volume->setValue(85);
+            window.openFile(first);
+            QCOMPARE(volume->value(), 0);
+            QCOMPARE(gamma->value(), 23);
+            QCOMPARE(window.findChild<QAudioOutput *>()->volume(), 0.f);
+            QCOMPARE(window.findChild<QLabel *>("volumeReadout")->text(), QString("Volume 0"));
+            QCOMPARE(window.findChild<QLabel *>("gammaReadout")->text(), QString("Gamma 2.3"));
+            // A missing file must not change the active video's settings.
+            window.openFile(temp.filePath("missing settings.mp4"));
+            QCOMPARE(volume->value(), 0);
+            QCOMPARE(gamma->value(), 23);
+            window.close();
+        }
+        {
+            PlayerWindow window;
+            auto *volume = window.findChild<QSlider *>("volume");
+            auto *gamma = window.findChild<QSlider *>("gamma");
+            auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+            auto *video = window.findChild<QVideoWidget *>();
+            window.openFile(first);
+            QCOMPARE(volume->value(), 0);
+            QCOMPARE(gamma->value(), 23);
+            QVERIFY(player->videoSink() != video->videoSink());
+            window.openFile(second);
+            QCOMPARE(volume->value(), 85);
+            QCOMPARE(gamma->value(), 10);
+            QCOMPARE(player->videoSink(), video->videoSink());
+            QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+            window.openFile(first);
+            QCOMPARE(volume->value(), 0);
+            QCOMPARE(gamma->value(), 23);
+            gamma->setValue(10);
+            window.close();
+        }
+        PlayerWindow reopened;
+        reopened.openFile(first);
+        QCOMPARE(reopened.findChild<QSlider *>("gamma")->value(), 10);
+        QCOMPARE(reopened.findChild<QSlider *>("volume")->value(), 0);
+        QCOMPARE(reopened.findChild<QMediaPlayer *>("mediaPlayer")->videoSink(),
+            reopened.findChild<QVideoWidget *>()->videoSink());
+        QSettings().remove("audio/volume");
+    }
     void gammaPixels() {
         QVideoSink output;
         GammaFilter filter(&output);

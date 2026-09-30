@@ -56,9 +56,9 @@ Paused-only follow-up: set `VIDEO_PLAYER_RESIZE_PAUSED_ONLY=1` alongside the dia
 
 ## Controls
 
-Volume is saved whenever it changes and restored on the next launch, including zero volume. The initial default is 70%.
+Volume and gamma are saved separately for each video's canonical file path whenever they change, including zero volume and neutral gamma. Reopening a video restores both settings, including after restarting the app. New videos use the last chosen volume (initially 70%) and gamma 1.0.
 
-The gamma slider adjusts video midtones from 0.1 to 4.0: values above 1.0 lighten the picture and values below 1.0 darken it. It starts at 1.0 (unchanged); double-click the slider to reset it. Changes apply immediately, including while paused, and the slider is available with the fullscreen controls. Gamma is kept for the current session and does not alter video files. Non-neutral gamma converts and adjusts frames on the CPU, which can increase the cost of high-resolution playback.
+The gamma slider adjusts video midtones from 0.1 to 4.0: values above 1.0 lighten the picture and values below 1.0 darken it. Double-click the slider to reset it to 1.0 (unchanged). Changes apply immediately, including while paused, and the slider is available with the fullscreen controls. Gamma does not alter video files. At 1.0, video output bypasses the filter entirely. Non-neutral gamma converts and adjusts frames on the CPU, which can increase the cost of high-resolution playback.
 
 Playback position is saved per file when you close the app (including Escape) or open another video. Reopening that file resumes from the saved position. Finished videos restart from the beginning. Positions are stored in the current user's Qt settings.
 

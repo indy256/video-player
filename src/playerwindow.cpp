@@ -189,6 +189,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         const QString text = QString("Gamma %1").arg(value / 10.0, 0, 'f', 1);
         gammaLabel->setText(text);
         gamma->setToolTip(text + " (double-click to reset)");
+        saveVideoSettings();
         auto *input = gammaFilter->input();
         auto *output = video->videoSink();
         if (value == 10) {
@@ -244,9 +245,12 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(volume, &QSlider::valueChanged, this, [this, volumeLabel](int value) {
         volumeLabel->setText(QString("Volume %1").arg(value));
         audio->setVolume(value / 100.f);
-        QSettings settings;
-        settings.setValue("audio/volume", value);
-        settings.sync();
+        if (!restoringVideoSettings) {
+            QSettings settings;
+            settings.setValue("audio/volume", value);
+            settings.sync();
+            saveVideoSettings();
+        }
     });
     connect(timeline, &QSlider::valueChanged, this, &PlayerWindow::seekToSlider);
     connect(timeline, &QSlider::sliderReleased, this, &PlayerWindow::updateTimeline);
@@ -345,19 +349,36 @@ void PlayerWindow::openFile(const QString &path) {
     clickTimer->stop();
     timeline->setSliderDown(false);
     player->stop();
-    frameReady = false;
     QString identity = file.canonicalFilePath();
 #ifdef Q_OS_WIN
     identity = identity.toCaseFolded();
 #endif
-    positionKey = "positions/" + QString::fromLatin1(QCryptographicHash::hash(
+    const QString fileKey = QString::fromLatin1(QCryptographicHash::hash(
         identity.toUtf8(), QCryptographicHash::Sha256).toHex());
-    pendingPosition = QSettings().value(positionKey, 0).toLongLong();
+    positionKey = "positions/" + fileKey;
+    videoSettingsKey = "videos/" + fileKey;
+    QSettings settings;
+    pendingPosition = settings.value(positionKey, 0).toLongLong();
+    restoringVideoSettings = true;
+    volume->setValue(qBound(0, settings.value(videoSettingsKey + "/volume",
+        settings.value("audio/volume", 70)).toInt(), 100));
+    gamma->setValue(qBound(1, settings.value(videoSettingsKey + "/gamma", 10).toInt(), 40));
+    restoringVideoSettings = false;
+    saveVideoSettings();
+    frameReady = false;
     stage->setCurrentIndex(2);
     setWindowTitle(file.fileName() + QStringLiteral(" - Video Player v" VIDEO_PLAYER_VERSION));
     player->setSource(QUrl::fromLocalFile(file.absoluteFilePath()));
     restorePosition();
     player->play();
+}
+
+void PlayerWindow::saveVideoSettings() {
+    if (restoringVideoSettings || videoSettingsKey.isEmpty()) return;
+    QSettings settings;
+    settings.setValue(videoSettingsKey + "/volume", volume->value());
+    settings.setValue(videoSettingsKey + "/gamma", gamma->value());
+    settings.sync();
 }
 
 void PlayerWindow::savePosition() {

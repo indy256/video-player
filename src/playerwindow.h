@@ -30,6 +30,7 @@ protected:
 private:
     void savePosition();
     void restorePosition();
+    void saveVideoSettings();
     bool playbackReady() const;
     void toggleFullscreen();
     void updateFullscreen();
@@ -64,5 +65,7 @@ private:
     bool frameReady = false;
     bool updating = false;
     QString positionKey;
+    QString videoSettingsKey;
+    bool restoringVideoSettings = false;
     qint64 pendingPosition = -1;
 };
