@@ -21,6 +21,7 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QPushButton>
+#include <QPainter>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QStackedWidget>
@@ -33,6 +34,35 @@
 #endif
 
 namespace {
+class FullscreenCloseButton final : public QAbstractButton {
+public:
+    explicit FullscreenCloseButton(QWidget *parent) : QAbstractButton(parent) {
+        // Like the seek panel, this must sit above the native video window.
+        setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setFixedSize(43, 43);
+        setFocusPolicy(Qt::NoFocus);
+        setCursor(Qt::PointingHandCursor);
+        setToolTip(tr("Close"));
+        setAccessibleName(tr("Close"));
+        hide();
+    }
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.fillRect(rect(), isDown() ? QColor(170, 35, 35) : QColor(40, 40, 40, 220));
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(QColor(160, 160, 160), 1, Qt::SolidLine, Qt::RoundCap));
+        const QPointF center(width() / 2.0, height() / 2.0);
+        painter.drawLine(center + QPointF(-7, -7), center + QPointF(7, 7));
+        painter.drawLine(center + QPointF(7, -7), center + QPointF(-7, 7));
+    }
+    void leaveEvent(QEvent *event) override {
+        hide();
+        QAbstractButton::leaveEvent(event);
+    }
+};
+
 constexpr int timelineSteps = 1000000;
 QString timestamp(qint64 milliseconds) {
     const qint64 seconds = qMax(qint64(0), milliseconds) / 1000;
@@ -138,6 +168,9 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     volume->setFixedWidth(100);
     controls->addWidget(volume, 0, 1, Qt::AlignVCenter);
     layout->addWidget(controlsPanel);
+    fullscreenClose = new FullscreenCloseButton(this);
+    fullscreenClose->setObjectName("fullscreenClose");
+    connect(fullscreenClose, &QAbstractButton::clicked, this, &PlayerWindow::close);
     // Poll only in fullscreen: native video surfaces do not always forward mouse moves.
     controlsTimer = new QTimer(this);
     controlsTimer->setInterval(100);
@@ -301,6 +334,7 @@ void PlayerWindow::restorePosition() {
 void PlayerWindow::closeEvent(QCloseEvent *event) {
     clickTimer->stop();
     controlsTimer->stop();
+    fullscreenClose->hide();
     savePosition();
     QMainWindow::closeEvent(event);
 }
@@ -434,6 +468,7 @@ void PlayerWindow::updateFullscreen() {
         controlsTimer->start();
     } else {
         controlsTimer->stop();
+        fullscreenClose->hide();
         if (controlsPanel->isWindow()) controlsPanel->setParent(centralWidget(), Qt::Widget);
         if (layout->indexOf(controlsPanel) < 0) layout->addWidget(controlsPanel);
         controlsPanel->show();
@@ -449,8 +484,16 @@ void PlayerWindow::updateFullscreenControls() {
     if (!isFullScreen()) return;
     if (!isVisible() || isMinimized()) {
         controlsPanel->hide();
+        fullscreenClose->hide();
         return;
     }
+    fullscreenClose->move(centralWidget()->mapToGlobal(
+        QPoint(centralWidget()->width() - fullscreenClose->width(), 0)));
+    const bool overClose = fullscreenClose->geometry().contains(QCursor::pos());
+    fullscreenClose->setVisible(overClose && !QApplication::activePopupWidget()
+        && !QApplication::activeModalWidget()
+        && (QApplication::mouseButtons() == Qt::NoButton || fullscreenClose->isDown()));
+    if (fullscreenClose->isVisible()) fullscreenClose->raise();
     const int panelHeight = controlsPanel->sizeHint().height();
     const QPoint panelPosition = centralWidget()->mapToGlobal(QPoint(0, centralWidget()->height() - panelHeight));
     controlsPanel->setGeometry(QRect(panelPosition, QSize(centralWidget()->width(), panelHeight)));

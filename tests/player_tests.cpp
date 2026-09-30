@@ -1,6 +1,7 @@
 #include "playerwindow.h"
 #include "seekslider.h"
 #include <QApplication>
+#include <QAbstractButton>
 #include <QFile>
 #include <QLabel>
 #include <QProcess>
@@ -345,6 +346,47 @@ private slots:
         QTRY_VERIFY(panel->isVisible());
         QVERIFY(!panel->isWindow());
         QTRY_VERIFY(panel->y() >= video->mapTo(window.centralWidget(), QPoint(0, video->height())).y());
+        QCursor::setPos(savedCursor);
+    }
+    void fullscreenCloseButton() {
+        PlayerWindow window;
+        window.show();
+        auto *button = window.findChild<QAbstractButton *>("fullscreenClose");
+        QVERIFY(button);
+        QVERIFY(!button->isVisible());
+        const QPoint savedCursor = QCursor::pos();
+        window.openFile(clip);
+        window.showFullScreen();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *video = window.findChild<QVideoWidget *>();
+        QTRY_VERIFY_WITH_TIMEOUT(video->isVisible(), 10000);
+        QCursor::setPos(window.mapToGlobal(window.rect().center()));
+        QTRY_VERIFY(!button->isVisible());
+        const QRect videoGeometry(video->mapToGlobal(QPoint()), video->size());
+        QCursor::setPos(window.mapToGlobal(QPoint(window.width() - 1, 1)));
+        QTRY_VERIFY(button->isVisible());
+        QVERIFY(button->isWindow());
+        QCOMPARE(button->geometry().topRight(), window.centralWidget()->mapToGlobal(
+            window.centralWidget()->rect().topRight()));
+        QCOMPARE(QRect(video->mapToGlobal(QPoint()), video->size()), videoGeometry);
+        QCursor::setPos(button->mapToGlobal(button->rect().center()));
+        QTest::qWait(150);
+        QVERIFY(button->isVisible());
+        QCursor::setPos(window.mapToGlobal(window.rect().center()));
+        QTRY_VERIFY(!button->isVisible());
+        QCursor::setPos(window.mapToGlobal(QPoint(window.width() - 1, 1)));
+        QTRY_VERIFY(button->isVisible());
+        window.showNormal();
+        QTRY_VERIFY(!button->isVisible());
+        window.showFullScreen();
+        QCursor::setPos(window.mapToGlobal(QPoint(window.width() - 1, 1)));
+        QTRY_VERIFY(button->isVisible());
+        QTest::mousePress(button, Qt::LeftButton, Qt::NoModifier, button->rect().center());
+        QTest::qWait(150);
+        QVERIFY(button->isVisible());
+        QTest::mouseRelease(button, Qt::LeftButton, Qt::NoModifier, button->rect().center());
+        QTRY_VERIFY(!window.isVisible());
+        QVERIFY(!button->isVisible());
         QCursor::setPos(savedCursor);
     }
     void mousePlaybackAndFullscreen() {

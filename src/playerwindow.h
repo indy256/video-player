@@ -9,6 +9,7 @@ class SeekSlider;
 class QTimer;
 class QSlider;
 class QContextMenuEvent;
+class QAbstractButton;
 
 class PlayerWindow : public QMainWindow {
     Q_OBJECT
@@ -51,6 +52,7 @@ private:
     QTimer *clickTimer;
     QSlider *volume;
     QWidget *controlsPanel;
+    QAbstractButton *fullscreenClose;
     QTimer *controlsTimer;
     QByteArray windowedGeometry;
     int wheelRemainder = 0;
