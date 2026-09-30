@@ -19,6 +19,7 @@
 #include <QGridLayout>
 #include <QLabel>
 #include <QMimeData>
+#include <QMediaMetaData>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QPushButton>
@@ -158,7 +159,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     controls->addWidget(timeline, 0, 0, Qt::AlignVCenter);
     timeLabel = new QLabel;
     timeLabel->setObjectName("timeReadout");
-    timeLabel->setAccessibleName("Current and total time");
+    timeLabel->setAccessibleName("Current and total time, video codec and resolution");
     controls->addWidget(timeLabel, 1, 0);
     const auto addControlSlider = [this, controls](const QString &name, const QString &title, int column) {
         auto *slider = new SeekSlider;
@@ -226,6 +227,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(timeline, &QSlider::valueChanged, this, &PlayerWindow::seekToSlider);
     connect(timeline, &QSlider::sliderReleased, this, &PlayerWindow::updateTimeline);
     connect(player, &QMediaPlayer::positionChanged, this, &PlayerWindow::updateTimeline);
+    connect(player, &QMediaPlayer::metaDataChanged, this, &PlayerWindow::updateTimeline);
     connect(player, &QMediaPlayer::durationChanged, this, [this] { updateControls(); updateTimeline(); });
     connect(player, &QMediaPlayer::seekableChanged, this, &PlayerWindow::updateControls);
     connect(player, &QMediaPlayer::playbackStateChanged, this, &PlayerWindow::updateControls);
@@ -567,7 +569,14 @@ void PlayerWindow::updateTimeline() {
     }
     const QString positionText = timestamp(position);
     const QString durationText = timestamp(duration);
-    timeLabel->setText(" " + positionText + " / " + durationText);
+    QString readout = " " + positionText + " / " + durationText;
+    const auto metadata = player->metaData();
+    const QString codec = metadata.stringValue(QMediaMetaData::VideoCodec);
+    if (!codec.isEmpty()) readout += "    " + codec;
+    const QSize resolution = metadata.value(QMediaMetaData::Resolution).toSize();
+    if (!resolution.isEmpty())
+        readout += QString("    %1\u00d7%2").arg(resolution.width()).arg(resolution.height());
+    timeLabel->setText(readout);
     timeline->setToolTip(positionText + " / " + durationText);
     timeline->setAccessibleDescription("Position " + positionText + " of " + durationText);
     if (duration > 0) {
