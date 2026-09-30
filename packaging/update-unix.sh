@@ -5,8 +5,18 @@ source=$2
 player_pid=$3
 video=$4
 stage=$(dirname "$source")
-exec >>"$stage/update.log" 2>&1
 test "$(dirname "$stage")" = "$(dirname "$target")"
+case "$stage" in /*/.video-player-update-*) ;; *) exit 1 ;; esac
+test ! -L "$stage"
+cleanup() {
+    # Preserve the old app only if restoring it after a failed move also failed.
+    if [ -d "$stage/previous.app" ] && [ ! -e "$target" ]; then
+        mv "$stage/previous.app" "$target" || return
+    fi
+    rm -rf -- "$stage"
+}
+trap cleanup EXIT
+cd "$(dirname "$target")"
 test -e "$target"
 test -e "$source"
 test ! -L "$target"
@@ -40,7 +50,7 @@ if [ -d "$target" ]; then
 else
     chmod 755 "$source"
     mv -f "$source" "$target"
-    if [ -n "$video" ]; then "$target" "$video" &
-    else "$target" & fi
+    if [ -n "$video" ]; then "$target" "$video" </dev/null >/dev/null 2>&1 &
+    else "$target" </dev/null >/dev/null 2>&1 & fi
 fi
 echo 'Update installed.'

@@ -1,7 +1,12 @@
 param([Parameter(Mandatory=$true)][string]$PlanPath)
 $ErrorActionPreference = 'Stop'
 $stage = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($PlanPath))
-$log = Join-Path $stage 'update.log'
+# Only clean the staging directory containing this helper and its plan.
+if ($stage -ne [IO.Path]::GetFullPath($PSScriptRoot) -or
+    [IO.Path]::GetFileName($stage) -notlike '.video-player-update-*') {
+    throw 'Invalid staging directory.'
+}
+Set-Location -LiteralPath ([IO.Path]::GetDirectoryName($stage))
 $replaced = $false
 function Restart-Player {
     $start = New-Object Diagnostics.ProcessStartInfo
@@ -42,16 +47,24 @@ try {
         }
     }
     Restart-Player
-    [IO.File]::WriteAllText($log, 'Update installed.')
 } catch {
     $failure = $_.Exception.Message
-    [IO.File]::WriteAllText($log, $failure)
     if (Test-Path -LiteralPath (Join-Path $stage 'commit')) {
         if (!$replaced -and $playerProcess -and $playerProcess.HasExited) {
             try { Restart-Player } catch {}
         }
         Add-Type -AssemblyName System.Windows.Forms
-        [Windows.Forms.MessageBox]::Show($failure + "`nDetails: " + $log, 'Video Player update failed') | Out-Null
+        [Windows.Forms.MessageBox]::Show($failure, 'Video Player update failed') | Out-Null
     }
     exit 1
+} finally {
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop
+            break
+        } catch {
+            if ($attempt -eq 9) { throw }
+            Start-Sleep -Milliseconds 200
+        }
+    }
 }

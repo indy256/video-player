@@ -29,6 +29,7 @@ test ! -f "$video"
 kill "$old_pid"
 wait "$old_pid" 2>/dev/null || true
 wait "$helper_pid"
+test ! -e "$stage"
 count=0
 while [ ! -f "$video" ]; do
     count=$((count + 1))
@@ -36,5 +37,12 @@ while [ ! -f "$video" ]; do
     sleep 1
 done
 test "$(cat "$video")" = "$video"
+test -x "$target"
+mkdir "$stage"
+if sh "$helper" "$target" "$stage/download" 0 "$video"; then
+    echo 'An update with a missing download should fail.'
+    exit 1
+fi
+test ! -e "$stage"
 test -x "$target"
 echo 'Unix update replacement and restart passed.'

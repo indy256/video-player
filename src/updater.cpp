@@ -233,10 +233,10 @@ bool AppUpdate::installLatest(QWidget *parent, const QString &videoPath) {
     installer.setProgram("/bin/sh");
     installer.setArguments({script, target, source, QString::number(QCoreApplication::applicationPid()), videoPath});
 #endif
-    installer.setWorkingDirectory(stage.path());
+    installer.setWorkingDirectory(QFileInfo(target).absolutePath());
     installer.setProcessEnvironment(cleanEnvironment());
     installer.setProcessChannelMode(QProcess::MergedChannels);
-    installer.setStandardOutputFile(stage.filePath("helper.log"));
+    installer.setStandardOutputFile(QProcess::nullDevice());
     if (!installer.startDetached()) return fail("Cannot start the update helper. Your application has not been changed.");
     stage.setAutoRemove(false);
     progress.setCancelButton(nullptr);
@@ -252,6 +252,6 @@ bool AppUpdate::installLatest(QWidget *parent, const QString &videoPath) {
     loop.exec();
     progress.hide();
     if (!QFileInfo::exists(ready) || !writeFile(commit, "install"))
-        return fail("The update helper could not prepare the installation. Your app is still running. Logs: " + stage.path());
+        return fail("The update helper could not prepare the installation. Your app is still running.");
     return true;
 }

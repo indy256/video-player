@@ -51,11 +51,17 @@ private slots:
         }
         QVERIFY(!AppUpdate::releaseAsset({}, name, asset));
     }
+    void windowsInstall_data() {
+        QTest::addColumn<bool>("invalidProcess");
+        QTest::newRow("success") << false;
+        QTest::newRow("preparation-failure") << true;
+    }
     void windowsInstall() {
 #ifndef Q_OS_WIN
         QSKIP("Windows helper integration test");
 #else
         Q_INIT_RESOURCE(updater);
+        QFETCH(bool, invalidProcess);
         QTemporaryDir root(QDir::tempPath() + "/player update ' & [test]-XXXXXX");
         QVERIFY(root.isValid());
         const QString stage = root.filePath(".video-player-update-test");
@@ -72,16 +78,30 @@ private slots:
         QProcess sleeper;
         sleeper.start(QCoreApplication::applicationFilePath(), {"--wait-for-update"});
         QVERIFY(sleeper.waitForStarted());
-        const QJsonObject plan{{"target", target}, {"source", source}, {"video", marker}, {"pid", sleeper.processId()}};
+        const QJsonObject plan{{"target", target}, {"source", source}, {"video", marker},
+                              {"pid", invalidProcess ? qint64(-1) : sleeper.processId()}};
         QFile planFile(stage + "/plan.json");
         QVERIFY(planFile.open(QIODevice::WriteOnly));
         planFile.write(QJsonDocument(plan).toJson());
         planFile.close();
         QProcess installer;
+        installer.setWorkingDirectory(root.path());
+        installer.setStandardOutputFile(QProcess::nullDevice());
+        installer.setProcessChannelMode(QProcess::MergedChannels);
         installer.start(qEnvironmentVariable("SystemRoot") + "/System32/WindowsPowerShell/v1.0/powershell.exe",
             {"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", stage + "/install.ps1",
              "-PlanPath", stage + "/plan.json"});
         QVERIFY(installer.waitForStarted());
+        if (invalidProcess) {
+            QVERIFY(installer.waitForFinished(30000));
+            QCOMPARE(installer.exitCode(), 1);
+            QVERIFY(!QDir(stage).exists());
+            QVERIFY(old.open(QIODevice::ReadOnly));
+            QCOMPARE(old.readAll(), QByteArray("old application"));
+            sleeper.kill();
+            QVERIFY(sleeper.waitForFinished());
+            return;
+        }
         QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(stage + "/ready"), 15000);
         QVERIFY(old.open(QIODevice::ReadOnly));
         QCOMPARE(old.readAll(), QByteArray("old application"));
@@ -95,6 +115,7 @@ private slots:
         QVERIFY(sleeper.waitForFinished());
         QVERIFY(installer.waitForFinished(30000));
         QCOMPARE(installer.exitCode(), 0);
+        QVERIFY(!QDir(stage).exists());
         QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(marker), 10000);
         QFile recorded(marker);
         QVERIFY(recorded.open(QIODevice::ReadOnly));
