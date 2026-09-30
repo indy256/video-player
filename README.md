@@ -21,6 +21,8 @@ The script uses the locally installed Qt 6.11.2 MinGW kit, MinGW 13.1, CMake, an
 
 Tests require `ffmpeg` on PATH solely to generate an eight-second video with audio. They exercise actual decoding, seeking and frame timestamps, pause/resume while scrubbing, replay, invalid media, and recovery using the offscreen Qt platform.
 
+To check subtitle cycling on a local file with at least two embedded subtitle tracks, set `VIDEO_PLAYER_SUBTITLE_CYCLING_EXAMPLE` to its path and run `build/player_tests.exe subtitleCyclingExample -platform windows` with the Qt DLL directory on PATH. This checks video-frame timing and audio continuity while cycling. Set `VIDEO_PLAYER_SUBTITLE_CYCLING_GAMMA=16` to also exercise gamma correction at 1.6.
+
 ## GitHub builds
 
 `.github/workflows/build.yml` runs on pushes, pull requests, and manual dispatch. It builds and tests Linux x64, Windows x64/ARM64, and macOS ARM64, then uploads an AppImage, portable Windows executables, and a macOS DMG. Pushing a `v*` tag also creates or updates a GitHub release after all builds pass.
@@ -64,7 +66,7 @@ The gamma slider adjusts video midtones from 0.1 to 4.0: values above 1.0 lighte
 
 Playback position is saved per file when you close the app (including Escape) or open another video. Reopening that file resumes from the saved position. Finished videos restart from the beginning. Positions are stored in the current user's Qt settings.
 
-Press `S` (Shift+S) to choose an embedded subtitle track or any `.srt` file beside the current video, or choose Off. External subtitles support UTF-8 and BOM-marked UTF-16, multiline cues, and overlapping cues. They follow playback and seeking and can be changed while paused. Opening another video clears the external subtitle selection.
+Press `S` (Shift+S) to choose an embedded subtitle track or any `.srt` file beside the current video, or choose Off. Embedded captions use a separate subtitle reader synchronized to playback, so changing them keeps the audio and video streams running. External subtitles support UTF-8 and BOM-marked UTF-16, multiline cues, and overlapping cues. They follow playback and seeking and can be changed while paused. Opening another video clears the subtitle selection.
 
 In either track popup, click a checkbox (or press Space on the highlighted item) to include or skip that item when cycling. Click its name or press Enter to select it; the current track is bold. Lowercase `a` and `s` cycle through checked audio and subtitle items in menu order, wrapping at the end. Every item, including subtitles Off, starts checked when a video is opened. Checkbox choices are retained until another video is opened. With no items checked, cycling leaves playback unchanged.
 

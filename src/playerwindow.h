@@ -14,6 +14,7 @@ class QSlider;
 class QContextMenuEvent;
 class QAbstractButton;
 class ExternalAudio;
+class EmbeddedSubtitles;
 
 class PlayerWindow : public QMainWindow {
     Q_OBJECT
@@ -45,7 +46,6 @@ private:
     void chooseAudioTrack(bool cycle = false);
     void chooseSubtitles(bool cycle = false);
     void updateSubtitles();
-    void clearExternalSubtitles();
     void togglePlayback();
     void updateControls();
     void updateTimeline();
@@ -54,6 +54,7 @@ private:
     void adjustVolume(int steps);
     QMediaPlayer *player;
     ExternalAudio *externalAudio;
+    EmbeddedSubtitles *embeddedSubtitles;
     QVideoWidget *video;
     QStackedWidget *stage;
     QLabel *statusLabel;

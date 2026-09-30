@@ -2,6 +2,7 @@
 #include "seekslider.h"
 #include "gammafilter.h"
 #include "externalaudio.h"
+#include "embeddedsubtitles.h"
 #include <QApplication>
 #include <QAbstractButton>
 #include <QFile>
@@ -509,9 +510,11 @@ private slots:
         QCOMPARE(player->activeAudioTrack(), 1);
 
         window.showFullScreen();
+        QSignalSpy subtitleChanges(player, &QMediaPlayer::activeTracksChanged);
         QVERIFY(selectSubtitle(window, -1));
         QVERIFY(cycleTrack(window, Qt::Key_S));
-        QCOMPARE(player->activeSubtitleTrack(), 0);
+        QCOMPARE(window.findChild<EmbeddedSubtitles *>()->activeTrack(), 0);
+        QCOMPARE(player->activeSubtitleTrack(), -1);
         QVERIFY(cycleTrack(window, Qt::Key_S));
         QCOMPARE(player->activeSubtitleTrack(), -1);
         QTRY_COMPARE(sink->subtitleText(), QString("first"));
@@ -532,6 +535,7 @@ private slots:
         QCOMPARE(sink->subtitleText(), QString("second"));
         QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
         QVERIFY(qAbs(player->position() - position) < 100);
+        QVERIFY(subtitleChanges.isEmpty());
 
         // A new video starts with every item checked again, including Off.
         window.openFile(clip);
@@ -621,10 +625,33 @@ private slots:
         QVERIFY(selectSubtitle(window, -1));
         QTRY_VERIFY(sink->videoFrame().subtitleText().isEmpty());
         QVERIFY(selectSubtitle(window, 0));
-        QCOMPARE(player->activeSubtitleTrack(), 0);
+        QCOMPARE(window.findChild<EmbeddedSubtitles *>()->activeTrack(), 0);
+        QCOMPARE(player->activeSubtitleTrack(), -1);
         player->setPosition(500);
         player->play();
         QTRY_COMPARE_WITH_TIMEOUT(sink->videoFrame().subtitleText(), QString("First external"), 10000);
+        auto *reader = window.findChild<QMediaPlayer *>("subtitlePlayer");
+        QCOMPARE(reader->activeAudioTrack(), -1);
+        QCOMPARE(reader->activeVideoTrack(), -1);
+        gamma->setValue(16);
+        QCOMPARE(sink->subtitleText(), QString("First external"));
+        gamma->setValue(10);
+        player->pause();
+        QTRY_COMPARE(reader->playbackState(), QMediaPlayer::PausedState);
+        player->setPosition(2200);
+        QCOMPARE(reader->position(), player->position());
+        player->setPlaybackRate(1.5);
+        QCOMPARE(reader->playbackRate(), 1.5);
+        player->play();
+        QTRY_COMPARE(sink->subtitleText(), QString("Second external"));
+        QTRY_COMPARE(reader->mediaStatus(), QMediaPlayer::EndOfMedia);
+        QVERIFY(player->isPlaying());
+        QSignalSpy subtitleStates(reader, &QMediaPlayer::playbackStateChanged);
+        QTest::qWait(250);
+        QVERIFY(subtitleStates.isEmpty()); // No repeated restarts after the final caption.
+        player->setPlaybackRate(1);
+        player->setPosition(1500);
+        QTRY_COMPARE(sink->subtitleText(), QString("First external"));
         player->pause();
         QVERIFY(selectSubtitle(window, path));
         QCOMPARE(player->activeSubtitleTrack(), -1);
@@ -634,6 +661,64 @@ private slots:
         window.openFile(clip);
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && sink->videoFrame().isValid(), 10000);
         QTRY_VERIFY(sink->subtitleText().isEmpty());
+        QVERIFY(reader->source().isEmpty());
+    }
+    void subtitleCyclingExample() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        const QString path = qEnvironmentVariable("VIDEO_PLAYER_SUBTITLE_CYCLING_EXAMPLE");
+        if (path.isEmpty()) QSKIP("Optional local subtitle cycling example");
+        PlayerWindow window;
+        window.show();
+        window.openFile(path);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *sink = window.findChild<QVideoWidget *>()->videoSink();
+        QAudioBufferOutput buffers;
+        player->setAudioBufferOutput(&buffers);
+        QTRY_VERIFY_WITH_TIMEOUT(player->isSeekable() && player->subtitleTracks().size() >= 2, 15000);
+        const int gamma = qEnvironmentVariableIntValue("VIDEO_PLAYER_SUBTITLE_CYCLING_GAMMA");
+        window.findChild<QSlider *>("gamma")->setValue(gamma > 0 ? gamma : 10);
+        window.findChild<QSlider *>("volume")->setValue(35);
+        player->setPosition(1800000);
+        QTRY_VERIFY_WITH_TIMEOUT(sink->videoFrame().startTime() / 1000 >= 1800000, 15000);
+        QTest::qWait(1000);
+        AudioSamples samples;
+        QElapsedTimer frameTimer, audioTimer;
+        frameTimer.start();
+        audioTimer.start();
+        qint64 frameGap = 0, audioGap = 0, keyTime = 0;
+        bool captionSeen = false;
+        QObject monitor;
+        connect(sink, &QVideoSink::subtitleTextChanged, &monitor, [&](const QString &text) {
+            captionSeen |= !text.isEmpty();
+        });
+        connect(sink, &QVideoSink::videoFrameChanged, &monitor, [&](const QVideoFrame &frame) {
+            if (frame.isValid()) frameGap = qMax(frameGap, frameTimer.restart());
+        });
+        connect(&buffers, &QAudioBufferOutput::audioBufferReceived, &monitor, [&](const QAudioBuffer &buffer) {
+            if (buffer.isValid()) {
+                audioGap = qMax(audioGap, audioTimer.restart());
+                samples.add(buffer);
+            }
+        });
+        QSignalSpy trackChanges(player, &QMediaPlayer::activeTracksChanged);
+        for (int i = 0; i < 9; ++i) {
+            QElapsedTimer timer;
+            timer.start();
+            QVERIFY(cycleTrack(window, Qt::Key_S));
+            keyTime = qMax(keyTime, timer.elapsed());
+            QTest::qWait(900);
+        }
+        qInfo() << "subtitle cycling gaps: video" << frameGap << "ms audio" << audioGap
+                << "ms key" << keyTime << "ms audio discontinuities" << samples.gaps;
+        QVERIFY(samples.count > 100);
+        QVERIFY(captionSeen);
+        QCOMPARE(samples.gaps, 0);
+        QVERIFY(frameGap < 250);
+        QVERIFY(audioGap < 250);
+        QVERIFY(trackChanges.isEmpty());
+#else
+        QSKIP("Audio buffer monitoring requires Qt 6.8");
+#endif
     }
     void subtitleExample() {
         const QString directory = qEnvironmentVariable("VIDEO_PLAYER_SUBTITLE_EXAMPLE");

@@ -3,6 +3,7 @@
 #include "updater.h"
 #include "gammafilter.h"
 #include "externalaudio.h"
+#include "embeddedsubtitles.h"
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QMenu>
@@ -308,16 +309,13 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     });
     auto *gammaFilter = new GammaFilter(video->videoSink(), this);
     player->setVideoOutput(video);
-    connect(video->videoSink(), &QVideoSink::subtitleTextChanged, this, [this] {
-        QTimer::singleShot(0, this, [this] {
-            // A queued embedded subtitle update may arrive after switching to an external file.
-            if (!externalSubtitles.filePath().isEmpty()) updateSubtitles();
-            else if (!player->isPlaying()) {
-                auto *sink = video->videoSink();
-                setSubtitleText(sink, sink->subtitleText(), true);
-            }
-        });
-    });
+    embeddedSubtitles = new EmbeddedSubtitles(player, this);
+    connect(embeddedSubtitles, &EmbeddedSubtitles::textChanged, this, &PlayerWindow::updateSubtitles);
+    connect(embeddedSubtitles, &EmbeddedSubtitles::failed, this, [this](const QString &message) {
+        QMessageBox::warning(this, "Cannot play subtitles", message);
+    }, Qt::QueuedConnection);
+    connect(video->videoSink(), &QVideoSink::subtitleTextChanged,
+        this, &PlayerWindow::updateSubtitles, Qt::QueuedConnection);
     layout->addWidget(stage, 1);
     timeline = new SeekSlider;
     timeline->setObjectName("timeline");
@@ -516,8 +514,8 @@ void PlayerWindow::chooseAudioTrack(bool cycle) {
 void PlayerWindow::chooseSubtitles(bool cycle) {
     TrackMenu menu(player, this, "subtitleMenu", "Subtitles", excludedSubtitles);
     const bool embedded = externalSubtitles.filePath().isEmpty();
-    menu.addChoice("Off", -1, embedded && player->activeSubtitleTrack() < 0);
-    menu.addTracks(player->subtitleTracks(), embedded ? player->activeSubtitleTrack() : -1, false);
+    menu.addChoice("Off", -1, embedded && embeddedSubtitles->activeTrack() < 0);
+    menu.addTracks(player->subtitleTracks(), embedded ? embeddedSubtitles->activeTrack() : -1, false);
     menu.addFiles(subtitleFiles(player->source()), externalSubtitles.filePath());
     const auto *selected = cycle ? menu.nextChoice() : execPopupMenu(menu, mapToGlobal(rect().center()));
     if (!selected) return;
@@ -527,24 +525,20 @@ void PlayerWindow::chooseSubtitles(bool cycle) {
             QMessageBox::warning(this, "Cannot load subtitles", error);
             return;
         }
-        player->setActiveSubtitleTrack(-1);
-        updateSubtitles();
+        embeddedSubtitles->select(-1);
     } else {
-        clearExternalSubtitles();
-        player->setActiveSubtitleTrack(selected->data().toInt());
+        externalSubtitles.clear();
+        embeddedSubtitles->select(selected->data().toInt());
     }
+    updateSubtitles();
 }
 
 void PlayerWindow::updateSubtitles() {
-    if (externalSubtitles.filePath().isEmpty()) return;
-    const QString text = player->playbackState() == QMediaPlayer::StoppedState
-        ? QString() : externalSubtitles.textAt(player->position());
+    QString text;
+    if (player->playbackState() != QMediaPlayer::StoppedState)
+        text = externalSubtitles.filePath().isEmpty()
+            ? embeddedSubtitles->text() : externalSubtitles.textAt(player->position());
     setSubtitleText(player->videoSink(), text, !player->isPlaying());
-}
-
-void PlayerWindow::clearExternalSubtitles() {
-    externalSubtitles.clear();
-    setSubtitleText(player->videoSink(), {}, !player->isPlaying());
 }
 
 void PlayerWindow::openFile(const QString &path) {
@@ -554,7 +548,7 @@ void PlayerWindow::openFile(const QString &path) {
         return;
     }
     savePosition();
-    clearExternalSubtitles();
+    externalSubtitles.clear();
     externalAudio->clear();
     excludedAudioTracks.clear();
     excludedSubtitles.clear();
@@ -623,6 +617,7 @@ void PlayerWindow::closeEvent(QCloseEvent *event) {
     fullscreenClose->hide();
     savePosition();
     externalAudio->clear();
+    embeddedSubtitles->clear();
     player->stop();
     QMainWindow::closeEvent(event);
 }
