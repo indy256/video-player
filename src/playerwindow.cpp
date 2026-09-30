@@ -5,6 +5,7 @@
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QMenu>
+#include <QActionGroup>
 #include <QAudioOutput>
 #include <QApplication>
 #include <QTimer>
@@ -36,6 +37,14 @@
 #endif
 
 namespace {
+constexpr auto popupMenuStyle = R"(
+    QMenu { background: #242b3b; color: #e4eaf8; border: 1px solid #475575;
+            padding: 4px; font-family: 'Segoe UI'; font-size: 13px; }
+    QMenu::item { padding: 7px 24px; }
+    QMenu::item:selected { background: #33415b; }
+    QMenu::item:disabled { color: #596173; }
+)";
+
 class FullscreenCloseButton final : public QAbstractButton {
 public:
     explicit FullscreenCloseButton(QWidget *parent) : QAbstractButton(parent) {
@@ -85,7 +94,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     setAcceptDrops(true);
     player = new QMediaPlayer(this);
     player->setObjectName("mediaPlayer");
-    audio = new QAudioOutput(this);
+    auto *audio = new QAudioOutput(this);
     const int savedVolume = qBound(0, QSettings().value("audio/volume", 70).toInt(), 100);
     audio->setVolume(savedVolume / 100.f);
     player->setAudioOutput(audio);
@@ -213,13 +222,9 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QSlider::handle:horizontal { background: #e5edff; width: 14px; margin: -5px 0; border-radius: 7px; }
         QSlider:disabled::sub-page:horizontal { background: #2b3243; }
         QToolTip { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; }
-        QMenu { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; padding: 4px; }
-        QMenu::item { padding: 7px 24px; }
-        QMenu::item:selected { background: #33415b; }
-        QMenu::item:disabled { color: #596173; }
     )");
     connect(emptyOpen, &QPushButton::clicked, this, &PlayerWindow::chooseFile);
-    connect(volume, &QSlider::valueChanged, this, [this, volumeLabel](int value) {
+    connect(volume, &QSlider::valueChanged, this, [this, audio, volumeLabel](int value) {
         volumeLabel->setText(QString("Volume %1").arg(value));
         audio->setVolume(value / 100.f);
         saveVideoSettings(true);
@@ -241,6 +246,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         auto *action = new QShortcut(key, this); connect(action, &QShortcut::activated, this, callback);
     };
     shortcut(QKeySequence::Open, &PlayerWindow::chooseFile);
+    shortcut(QKeySequence(Qt::Key_A), &PlayerWindow::chooseAudioTrack);
     shortcut(QKeySequence(Qt::Key_Space), &PlayerWindow::togglePlayback);
     shortcut(QKeySequence(Qt::Key_Left), [this] { skip(-10000); });
     shortcut(QKeySequence(Qt::Key_Right), [this] { skip(10000); });
@@ -287,8 +293,13 @@ void PlayerWindow::contextMenuEvent(QContextMenuEvent *event) {
     event->accept();
 }
 
-void PlayerWindow::showPopupMenu(const QPoint &position) {
+QAction *PlayerWindow::execPopupMenu(QMenu &menu, const QPoint &position) {
     clickTimer->stop();
+    menu.setStyleSheet(popupMenuStyle);
+    return menu.exec(position);
+}
+
+void PlayerWindow::showPopupMenu(const QPoint &position) {
     QMenu menu(this);
     menu.addAction("Open video", this, &PlayerWindow::chooseFile);
     auto *play = menu.addAction(player->isPlaying() ? "Pause" : "Play", this, &PlayerWindow::togglePlayback);
@@ -308,7 +319,33 @@ void PlayerWindow::showPopupMenu(const QPoint &position) {
     update->setEnabled(!updating);
     menu.addSeparator();
     menu.addAction("Exit", this, &PlayerWindow::close);
-    menu.exec(position);
+    execPopupMenu(menu, position);
+}
+
+void PlayerWindow::chooseAudioTrack() {
+    QMenu menu(this);
+    menu.setObjectName("audioTrackMenu");
+    menu.setAccessibleName("Audio tracks");
+    QActionGroup group(&menu);
+    const auto tracks = player->audioTracks();
+    for (int index = 0; index < tracks.size(); ++index) {
+        QStringList details{QString("Track %1").arg(index + 1)};
+        for (auto key : {QMediaMetaData::Title, QMediaMetaData::Language, QMediaMetaData::AudioCodec}) {
+            const QString value = tracks[index].stringValue(key);
+            if (!value.isEmpty()) details.append(value);
+        }
+        auto *action = menu.addAction(details.join(" - ").replace("&", "&&"));
+        action->setData(index);
+        action->setCheckable(true);
+        action->setChecked(index == player->activeAudioTrack());
+        group.addAction(action);
+    }
+    if (tracks.isEmpty()) menu.addAction("No audio tracks available")->setEnabled(false);
+    // A file opened through another instance can change tracks while the menu is open.
+    connect(player, &QMediaPlayer::tracksChanged, &menu, &QMenu::close);
+    connect(player, &QMediaPlayer::sourceChanged, &menu, &QMenu::close);
+    const auto *selected = execPopupMenu(menu, mapToGlobal(rect().center()));
+    if (selected && selected->data().isValid()) player->setActiveAudioTrack(selected->data().toInt());
 }
 
 void PlayerWindow::openFile(const QString &path) {
@@ -569,7 +606,8 @@ void PlayerWindow::updateTimeline() {
     }
     const QString positionText = timestamp(position);
     const QString durationText = timestamp(duration);
-    QString readout = " " + positionText + " / " + durationText;
+    const QString timeText = positionText + " / " + durationText;
+    QString readout = " " + timeText;
     const auto metadata = player->metaData();
     const QString codec = metadata.stringValue(QMediaMetaData::VideoCodec);
     if (!codec.isEmpty()) readout += "    " + codec;
@@ -577,7 +615,7 @@ void PlayerWindow::updateTimeline() {
     if (!resolution.isEmpty())
         readout += QString("    %1\u00d7%2").arg(resolution.width()).arg(resolution.height());
     timeLabel->setText(readout);
-    timeline->setToolTip(positionText + " / " + durationText);
+    timeline->setToolTip(timeText);
     timeline->setAccessibleDescription("Position " + positionText + " of " + durationText);
     if (duration > 0) {
         timeline->setSingleStep(qMax(1, qRound(5000.0 * timelineSteps / duration)));

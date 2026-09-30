@@ -20,6 +20,7 @@
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QMenu>
+#include <QMediaMetaData>
 #include <QTimer>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
@@ -106,6 +107,77 @@ private slots:
             QApplication::sendEvent(surface, &event);
             QVERIFY(found);
         }
+    }
+    void audioTrackSelection() {
+        const QString multiAudio = temp.filePath("two audio tracks.mkv");
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", {"-hide_banner", "-loglevel", "error", "-i", clip,
+            "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000",
+            "-map", "0:v", "-map", "0:a", "-map", "1:a", "-c:v", "copy", "-c:a", "aac",
+            "-metadata:s:a:0", "language=eng", "-metadata:s:a:0", "title=Original",
+            "-metadata:s:a:1", "language=spa", "-metadata:s:a:1", "title=Commentary",
+            "-t", "8", "-y", multiAudio});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        PlayerWindow window;
+        window.show();
+        window.activateWindow();
+        QTRY_VERIFY(window.isActiveWindow());
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        bool emptyMessage = false;
+        QTimer::singleShot(0, &window, [&] {
+            if (auto *menu = window.findChild<QMenu *>("audioTrackMenu")) {
+                for (auto *action : menu->actions())
+                    if (action->text() == "No audio tracks available") emptyMessage = !action->isEnabled();
+                menu->close();
+            }
+        });
+        QTest::keyClick(&window, Qt::Key_A);
+        QVERIFY(emptyMessage);
+        window.openFile(multiAudio);
+        QTRY_COMPARE_WITH_TIMEOUT(player->audioTracks().size(), 2, 10000);
+        QTRY_VERIFY(player->isPlaying());
+        player->pause();
+        QTest::qWait(100);
+        const qint64 position = player->position();
+        for (int chosen : {1, 0, -1}) {
+            if (chosen == 0) {
+                window.showFullScreen();
+                QTest::qWait(100);
+            }
+            window.activateWindow();
+            QTRY_VERIFY(window.isActiveWindow());
+            const int previous = player->activeAudioTrack();
+            int count = 0;
+            int checked = -1;
+            bool named = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto *menu = window.findChild<QMenu *>("audioTrackMenu");
+                if (!menu) return;
+                QAction *selection = nullptr;
+                for (auto *action : menu->actions()) {
+                    if (!action->data().isValid()) continue;
+                    ++count;
+                    if (action->isChecked()) checked = action->data().toInt();
+                    if (action->data().toInt() == 1) named = action->text().contains("Commentary");
+                    if (action->data().toInt() == chosen) selection = action;
+                }
+                if (selection) {
+                    menu->setActiveAction(selection);
+                    QTest::keyClick(menu, Qt::Key_Return);
+                } else QTest::keyClick(menu, Qt::Key_Escape);
+            });
+            QTest::keyClick(&window, Qt::Key_A);
+            QCOMPARE(count, 2);
+            QCOMPARE(checked, previous);
+            QVERIFY(named);
+            QCOMPARE(player->activeAudioTrack(), chosen < 0 ? previous : chosen);
+            QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+            QVERIFY(qAbs(player->position() - position) < 100);
+            QVERIFY(window.isVisible());
+        }
+        player->play();
+        QTRY_VERIFY(player->position() > position + 300);
     }
     void nativeStartupBackground() {
 #ifdef Q_OS_WIN

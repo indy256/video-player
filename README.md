@@ -66,6 +66,7 @@ Playback position is saved per file when you close the app (including Escape) or
 | --- | --- |
 | Right-click → Open video / Ctrl+O | Choose a local file |
 | Space | Play or pause |
+| A | Show audio tracks and select the track to play |
 | Left-click video | After release, play or pause once the system double-click interval expires, only if no drag occurred |
 | Double-click video | Toggle fullscreen without briefly pausing or resuming playback |
 | Click and drag video or empty background | Move the window in normal windowed mode without changing playback |

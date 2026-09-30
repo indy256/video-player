@@ -4,7 +4,8 @@
 class QLabel;
 class QStackedWidget;
 class QVideoWidget;
-class QAudioOutput;
+class QMenu;
+class QAction;
 class SeekSlider;
 class QTimer;
 class QSlider;
@@ -37,6 +38,8 @@ private:
     void updateFullscreenControls();
     void chooseFile();
     void showPopupMenu(const QPoint &position);
+    QAction *execPopupMenu(QMenu &menu, const QPoint &position);
+    void chooseAudioTrack();
     void togglePlayback();
     void updateControls();
     void updateTimeline();
@@ -44,7 +47,6 @@ private:
     void skip(qint64 delta);
     void adjustVolume(int steps);
     QMediaPlayer *player;
-    QAudioOutput *audio;
     QVideoWidget *video;
     QStackedWidget *stage;
     QLabel *statusLabel;
