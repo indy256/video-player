@@ -169,6 +169,9 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     volume->setValue(savedVolume);
     volume->setFixedWidth(100);
     controls->addWidget(volume, 0, 1, Qt::AlignVCenter);
+    auto *volumeLabel = new QLabel(QString("Volume %1").arg(savedVolume));
+    volumeLabel->setObjectName("volumeReadout");
+    controls->addWidget(volumeLabel, 1, 1);
     gamma = new QSlider(Qt::Horizontal);
     gamma->setObjectName("gamma");
     gamma->setAccessibleName("Gamma");
@@ -238,7 +241,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QMenu::item:disabled { color: #596173; }
     )");
     connect(emptyOpen, &QPushButton::clicked, this, &PlayerWindow::chooseFile);
-    connect(volume, &QSlider::valueChanged, this, [this](int value) {
+    connect(volume, &QSlider::valueChanged, this, [this, volumeLabel](int value) {
+        volumeLabel->setText(QString("Volume %1").arg(value));
         audio->setVolume(value / 100.f);
         QSettings settings;
         settings.setValue("audio/volume", value);
