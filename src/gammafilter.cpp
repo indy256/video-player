@@ -1,11 +1,36 @@
 #include "gammafilter.h"
 #include <QImage>
+#include <QMediaPlayer>
+#include <QSignalBlocker>
 #include <cmath>
 
 GammaFilter::GammaFilter(QVideoSink *output, QObject *parent)
     : QObject(parent), destination(output) {
     connect(&source, &QVideoSink::videoFrameChanged, this, [this] { present(); });
     connect(&source, &QVideoSink::subtitleTextChanged, destination, &QVideoSink::setSubtitleText);
+}
+
+void GammaFilter::apply(QMediaPlayer *player, int tenths) {
+    tenths = qBound(1, tenths, 40);
+    QVideoSink *target = tenths == 10 ? destination : &source;
+    if (player->videoSink() != target) {
+        // Preserve the original frame and subtitles when switching, including while paused.
+        QVideoSink *current = player->videoSink();
+        const QVideoFrame frame = current->videoFrame();
+        const QString subtitle = current->subtitleText();
+        const QSignalBlocker blocker(&source);
+        player->setVideoSink(target);
+        target->setVideoFrame(frame);
+        target->setSubtitleText(subtitle);
+    }
+    if (tenths == 10) {
+        // Native rendering bypasses the filter and releases its cached frame.
+        gammaTenths = 10;
+        const QSignalBlocker blocker(&source);
+        source.setVideoFrame({});
+        return;
+    }
+    setGamma(tenths);
 }
 
 void GammaFilter::setGamma(int tenths) {
@@ -21,22 +46,16 @@ void GammaFilter::setGamma(int tenths) {
 }
 
 void GammaFilter::present() {
-    const QVideoFrame original = source.videoFrame();
-    if (gammaTenths == 10 || !original.isValid()) {
-        destination->setVideoFrame(original);
-        return;
-    }
+    destination->setVideoFrame(adjustedFrame(source.videoFrame()));
+}
+
+QVideoFrame GammaFilter::adjustedFrame(const QVideoFrame &original) const {
+    if (gammaTenths == 10 || !original.isValid()) return original;
     const QImage image = original.toImage().convertToFormat(QImage::Format_RGBA8888);
-    if (image.isNull()) {
-        destination->setVideoFrame(original);
-        return;
-    }
+    if (image.isNull()) return original;
     // Allocate a separate frame: mapped QVideoFrames share their pixel storage.
     QVideoFrame adjusted(QVideoFrameFormat(image.size(), QVideoFrameFormat::Format_RGBA8888));
-    if (!adjusted.map(QVideoFrame::WriteOnly)) {
-        destination->setVideoFrame(original);
-        return;
-    }
+    if (!adjusted.map(QVideoFrame::WriteOnly)) return original;
     for (int y = 0; y < image.height(); ++y) {
         const uchar *in = image.constScanLine(y);
         uchar *out = adjusted.bits(0) + y * adjusted.bytesPerLine(0);
@@ -58,5 +77,5 @@ void GammaFilter::present() {
     adjusted.setRotationAngle(original.rotationAngle());
 #endif
     adjusted.setMirrored(original.mirrored());
-    destination->setVideoFrame(adjusted);
+    return adjusted;
 }

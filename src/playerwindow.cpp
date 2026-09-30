@@ -15,7 +15,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QEvent>
-#include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QGridLayout>
 #include <QLabel>
 #include <QMimeData>
@@ -146,6 +146,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     timeline->setAccessibleName("Video position");
     timeline->setRange(0, timelineSteps);
     timeline->setToolTip("Click or drag to seek");
+    timeline->installEventFilter(this);
     controlsPanel = new QWidget(page);
     controlsPanel->setObjectName("controlsPanel");
     controlsPanel->setAttribute(Qt::WA_ShowWithoutActivating);
@@ -159,61 +160,36 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     timeLabel->setObjectName("timeReadout");
     timeLabel->setAccessibleName("Current and total time");
     controls->addWidget(timeLabel, 1, 0);
-    volume = new SeekSlider;
-    volume->setObjectName("volume");
+    const auto addControlSlider = [this, controls](const QString &name, const QString &title, int column) {
+        auto *slider = new SeekSlider;
+        slider->setObjectName(name);
+        slider->setAccessibleName(title);
+        slider->setFixedWidth(100);
+        slider->installEventFilter(this);
+        controls->addWidget(slider, 0, column, Qt::AlignVCenter);
+        return slider;
+    };
+    volume = addControlSlider("volume", "Volume", 1);
     volume->setSingleStep(5);
-    volume->installEventFilter(this);
-    timeline->installEventFilter(this);
-    volume->setAccessibleName("Volume");
     volume->setRange(0, 100);
     volume->setValue(savedVolume);
-    volume->setFixedWidth(100);
-    controls->addWidget(volume, 0, 1, Qt::AlignVCenter);
     auto *volumeLabel = new QLabel(QString("Volume %1").arg(savedVolume));
     volumeLabel->setObjectName("volumeReadout");
     controls->addWidget(volumeLabel, 1, 1);
-    gamma = new SeekSlider;
-    gamma->setObjectName("gamma");
-    gamma->setAccessibleName("Gamma");
+    gamma = addControlSlider("gamma", "Gamma", 2);
     gamma->setRange(1, 40);
     gamma->setValue(10);
     gamma->setPageStep(5);
-    gamma->setFixedWidth(100);
-    gamma->installEventFilter(this);
     auto *gammaLabel = new QLabel("Gamma 1.0");
     gammaLabel->setObjectName("gammaReadout");
     gamma->setToolTip("Gamma 1.0 (double-click to reset)");
-    controls->addWidget(gamma, 0, 2, Qt::AlignVCenter);
     controls->addWidget(gammaLabel, 1, 2);
     connect(gamma, &QSlider::valueChanged, this, [gammaFilter, gammaLabel, this](int value) {
         const QString text = QString("Gamma %1").arg(value / 10.0, 0, 'f', 1);
         gammaLabel->setText(text);
         gamma->setToolTip(text + " (double-click to reset)");
         saveVideoSettings();
-        auto *input = gammaFilter->input();
-        auto *output = video->videoSink();
-        if (value == 10) {
-            const QVideoFrame original = input->videoFrame();
-            const QString subtitle = input->subtitleText();
-            gammaFilter->setGamma(10);
-            // Disconnect the filter completely at neutral gamma, restoring native rendering.
-            const QSignalBlocker blocker(input);
-            player->setVideoOutput(video);
-            input->setVideoFrame({});
-            output->setVideoFrame(original);
-            output->setSubtitleText(subtitle);
-            return;
-        }
-        if (player->videoSink() != input) {
-            // Seed the filter with the unmodified frame so paused playback updates immediately.
-            const QVideoFrame original = output->videoFrame();
-            const QString subtitle = output->subtitleText();
-            const QSignalBlocker blocker(input);
-            player->setVideoSink(input);
-            input->setVideoFrame(original);
-            input->setSubtitleText(subtitle);
-        }
-        gammaFilter->setGamma(value);
+        gammaFilter->apply(player, value);
     });
     layout->addWidget(controlsPanel);
     fullscreenClose = new FullscreenCloseButton(this);
@@ -245,12 +221,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(volume, &QSlider::valueChanged, this, [this, volumeLabel](int value) {
         volumeLabel->setText(QString("Volume %1").arg(value));
         audio->setVolume(value / 100.f);
-        if (!restoringVideoSettings) {
-            QSettings settings;
-            settings.setValue("audio/volume", value);
-            settings.sync();
-            saveVideoSettings();
-        }
+        saveVideoSettings(true);
     });
     connect(timeline, &QSlider::valueChanged, this, &PlayerWindow::seekToSlider);
     connect(timeline, &QSlider::sliderReleased, this, &PlayerWindow::updateTimeline);
@@ -353,16 +324,16 @@ void PlayerWindow::openFile(const QString &path) {
 #ifdef Q_OS_WIN
     identity = identity.toCaseFolded();
 #endif
-    const QString fileKey = QString::fromLatin1(QCryptographicHash::hash(
+    fileKey = QString::fromLatin1(QCryptographicHash::hash(
         identity.toUtf8(), QCryptographicHash::Sha256).toHex());
-    positionKey = "positions/" + fileKey;
-    videoSettingsKey = "videos/" + fileKey;
     QSettings settings;
-    pendingPosition = settings.value(positionKey, 0).toLongLong();
+    pendingPosition = settings.value("positions/" + fileKey, 0).toLongLong();
+    const int defaultVolume = settings.value("audio/volume", 70).toInt();
+    settings.beginGroup("videos/" + fileKey);
     restoringVideoSettings = true;
-    volume->setValue(qBound(0, settings.value(videoSettingsKey + "/volume",
-        settings.value("audio/volume", 70)).toInt(), 100));
-    gamma->setValue(qBound(1, settings.value(videoSettingsKey + "/gamma", 10).toInt(), 40));
+    // QSlider clamps restored values to its configured range.
+    volume->setValue(settings.value("volume", defaultVolume).toInt());
+    gamma->setValue(settings.value("gamma", 10).toInt());
     restoringVideoSettings = false;
     saveVideoSettings();
     frameReady = false;
@@ -373,19 +344,23 @@ void PlayerWindow::openFile(const QString &path) {
     player->play();
 }
 
-void PlayerWindow::saveVideoSettings() {
-    if (restoringVideoSettings || videoSettingsKey.isEmpty()) return;
+void PlayerWindow::saveVideoSettings(bool rememberVolume) {
+    if (restoringVideoSettings) return;
     QSettings settings;
-    settings.setValue(videoSettingsKey + "/volume", volume->value());
-    settings.setValue(videoSettingsKey + "/gamma", gamma->value());
+    if (rememberVolume) settings.setValue("audio/volume", volume->value());
+    if (!fileKey.isEmpty()) {
+        settings.beginGroup("videos/" + fileKey);
+        settings.setValue("volume", volume->value());
+        settings.setValue("gamma", gamma->value());
+    }
     settings.sync();
 }
 
 void PlayerWindow::savePosition() {
-    if (positionKey.isEmpty() || pendingPosition >= 0 || !player->isSeekable()
+    if (fileKey.isEmpty() || pendingPosition >= 0 || !player->isSeekable()
         || player->duration() <= 0 || player->error() != QMediaPlayer::NoError) return;
     QSettings settings;
-    settings.setValue(positionKey, player->mediaStatus() == QMediaPlayer::EndOfMedia
+    settings.setValue("positions/" + fileKey, player->mediaStatus() == QMediaPlayer::EndOfMedia
         ? qint64(0) : player->position());
     settings.sync();
 }
@@ -561,9 +536,10 @@ void PlayerWindow::updateFullscreenControls() {
         fullscreenClose->hide();
         return;
     }
+    const QPoint globalCursor = QCursor::pos();
     fullscreenClose->move(centralWidget()->mapToGlobal(
         QPoint(centralWidget()->width() - fullscreenClose->width(), 0)));
-    const bool overClose = fullscreenClose->geometry().contains(QCursor::pos());
+    const bool overClose = fullscreenClose->geometry().contains(globalCursor);
     fullscreenClose->setVisible(overClose && !QApplication::activePopupWidget()
         && !QApplication::activeModalWidget()
         && (QApplication::mouseButtons() == Qt::NoButton || fullscreenClose->isDown()));
@@ -571,11 +547,11 @@ void PlayerWindow::updateFullscreenControls() {
     const int panelHeight = controlsPanel->sizeHint().height();
     const QPoint panelPosition = centralWidget()->mapToGlobal(QPoint(0, centralWidget()->height() - panelHeight));
     controlsPanel->setGeometry(QRect(panelPosition, QSize(centralWidget()->width(), panelHeight)));
-    const QPoint cursor = centralWidget()->mapFromGlobal(QCursor::pos());
+    const QPoint cursor = centralWidget()->mapFromGlobal(globalCursor);
     const bool inside = centralWidget()->rect().contains(cursor);
     const bool atBottom = inside && cursor.y() >= centralWidget()->height() - 6;
     const bool overControls = inside && controlsPanel->isVisible()
-        && controlsPanel->geometry().contains(QCursor::pos());
+        && controlsPanel->geometry().contains(globalCursor);
     controlsPanel->setVisible(atBottom || overControls || timeline->isSliderDown()
         || volume->isSliderDown() || gamma->isSliderDown());
     if (controlsPanel->isVisible()) controlsPanel->raise();
