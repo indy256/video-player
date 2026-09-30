@@ -248,8 +248,10 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     shortcut(QKeySequence::Open, &PlayerWindow::chooseFile);
     shortcut(QKeySequence(Qt::Key_A), &PlayerWindow::chooseAudioTrack);
     shortcut(QKeySequence(Qt::Key_Space), &PlayerWindow::togglePlayback);
-    shortcut(QKeySequence(Qt::Key_Left), [this] { skip(-10000); });
-    shortcut(QKeySequence(Qt::Key_Right), [this] { skip(10000); });
+    shortcut(QKeySequence(Qt::Key_Left), [this] { skip(-3000); });
+    shortcut(QKeySequence(Qt::Key_Right), [this] { skip(3000); });
+    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_Left), [this] { skip(-30000); });
+    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_Right), [this] { skip(30000); });
     shortcut(QKeySequence(Qt::Key_Up), [this] { adjustVolume(1); });
     shortcut(QKeySequence(Qt::Key_Down), [this] { adjustVolume(-1); });
     shortcut(QKeySequence(Qt::Key_F11), &PlayerWindow::toggleFullscreen);

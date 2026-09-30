@@ -71,7 +71,8 @@ Playback position is saved per file when you close the app (including Escape) or
 | Double-click video | Toggle fullscreen without briefly pausing or resuming playback |
 | Click and drag video or empty background | Move the window in normal windowed mode without changing playback |
 | Timeline | Click or drag to seek immediately; playback continues from the latest selected position |
-| Left / Right | Skip backward / forward 10 seconds |
+| Left / Right | Skip backward / forward 3 seconds |
+| Shift+Left / Shift+Right | Skip backward / forward 30 seconds |
 | Volume slider | Adjust audio; set to zero to silence |
 | Gamma slider | Adjust midtones; double-click to reset to 1.0 |
 | Mouse wheel / Up / Down | Increase or decrease volume in 5% steps, including fullscreen |
