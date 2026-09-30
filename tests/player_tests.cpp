@@ -95,27 +95,78 @@ class PlayerTests : public QObject {
 private:
     QTemporaryDir temp;
     QString clip;
-    bool selectTrack(PlayerWindow &window, const QVariant &choice, Qt::Key key = Qt::Key_L) {
+    template <typename Callback>
+    bool withTrackMenu(PlayerWindow &window, Qt::Key key, Callback callback) {
         window.activateWindow();
         if (!QTest::qWaitForWindowActive(&window)) return false;
-        bool found = false;
-        QTimer::singleShot(0, &window, [&] {
+        bool opened = false;
+        QTimer timer;
+        timer.setSingleShot(true);
+        connect(&timer, &QTimer::timeout, &window, [&] {
             auto *menu = window.findChild<QMenu *>(key == Qt::Key_L ? "subtitleMenu" : "audioTrackMenu");
             if (!menu) return;
-            for (auto *action : menu->actions()) {
-                if (!action->isCheckable() || action->data() != choice) continue;
-                found = true;
-                menu->setActiveAction(action);
-                QTest::keyClick(menu, Qt::Key_Return);
-                return;
-            }
+            opened = true;
+            callback(*menu);
             menu->close();
         });
+        timer.start(0);
         QTest::keyClick(&window, key);
-        return found;
+        return opened;
+    }
+    bool selectTrack(PlayerWindow &window, const QVariant &choice, Qt::Key key = Qt::Key_L, bool mouse = false) {
+        bool found = false;
+        return withTrackMenu(window, key, [&](QMenu &menu) {
+            for (auto *action : menu.actions()) {
+                if (!action->isCheckable() || action->data() != choice) continue;
+                found = true;
+                if (mouse) {
+                    const QRect row = menu.actionGeometry(action);
+                    QTest::mouseClick(&menu, Qt::LeftButton, Qt::NoModifier, QPoint(row.right() - 16, row.center().y()));
+                } else {
+                    menu.setActiveAction(action);
+                    QTest::keyClick(&menu, Qt::Key_Return);
+                }
+                return;
+            }
+        }) && found;
     }
     bool selectSubtitle(PlayerWindow &window, const QVariant &choice) {
         return selectTrack(window, choice);
+    }
+    bool toggleTrackCheck(PlayerWindow &window, const QVariant &choice, Qt::Key key, bool keyboard = false) {
+        bool toggled = false;
+        return withTrackMenu(window, key, [&](QMenu &menu) {
+            for (auto *action : menu.actions()) {
+                if (!action->isCheckable() || action->data() != choice) continue;
+                const bool checked = action->isChecked();
+                if (keyboard) {
+                    menu.setActiveAction(action);
+                    QTest::keyClick(&menu, Qt::Key_Space);
+                } else {
+                    const QRect row = menu.actionGeometry(action);
+                    QTest::mouseClick(&menu, Qt::LeftButton, Qt::NoModifier, QPoint(row.left() + 10, row.center().y()));
+                }
+                toggled = menu.isVisible() && action->isChecked() != checked;
+                break;
+            }
+        }) && toggled;
+    }
+    bool cycleTrack(PlayerWindow &window, Qt::Key key) {
+        window.activateWindow();
+        if (!QTest::qWaitForWindowActive(&window)) return false;
+        bool popup = false;
+        QTimer guard;
+        guard.setSingleShot(true);
+        connect(&guard, &QTimer::timeout, &window, [&] {
+            for (auto *menu : window.findChildren<QMenu *>()) {
+                if (!menu->isVisible()) continue;
+                popup = true;
+                menu->close();
+            }
+        });
+        guard.start(0);
+        QTest::keyClick(&window, key, Qt::ShiftModifier);
+        return !popup;
     }
 private slots:
     void initTestCase() {
@@ -340,18 +391,12 @@ private slots:
         QCOMPARE(ffmpeg.exitCode(), 0);
         PlayerWindow window;
         window.show();
-        window.activateWindow();
-        QTRY_VERIFY(window.isActiveWindow());
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
         bool emptyMessage = false;
-        QTimer::singleShot(0, &window, [&] {
-            if (auto *menu = window.findChild<QMenu *>("audioTrackMenu")) {
-                for (auto *action : menu->actions())
-                    if (action->text() == "No audio tracks available") emptyMessage = !action->isEnabled();
-                menu->close();
-            }
-        });
-        QTest::keyClick(&window, Qt::Key_A);
+        QVERIFY(withTrackMenu(window, Qt::Key_A, [&](QMenu &menu) {
+            for (auto *action : menu.actions())
+                if (action->text() == "No audio tracks available") emptyMessage = !action->isEnabled();
+        }));
         QVERIFY(emptyMessage);
         window.openFile(multiAudio);
         QTRY_COMPARE_WITH_TIMEOUT(player->audioTracks().size(), 2, 10000);
@@ -364,31 +409,29 @@ private slots:
                 window.showFullScreen();
                 QTest::qWait(100);
             }
-            window.activateWindow();
-            QTRY_VERIFY(window.isActiveWindow());
             const int previous = player->activeAudioTrack();
             int count = 0;
-            int checked = -1;
+            int checked = 0;
+            int current = -1;
             bool named = false;
-            QTimer::singleShot(0, &window, [&] {
-                auto *menu = window.findChild<QMenu *>("audioTrackMenu");
-                if (!menu) return;
+            QVERIFY(withTrackMenu(window, Qt::Key_A, [&](QMenu &menu) {
                 QAction *selection = nullptr;
-                for (auto *action : menu->actions()) {
+                for (auto *action : menu.actions()) {
                     if (!action->data().isValid()) continue;
                     ++count;
-                    if (action->isChecked()) checked = action->data().toInt();
+                    if (action->isChecked()) ++checked;
+                    if (action->font().bold()) current = action->data().toInt();
                     if (action->data().toInt() == 1) named = action->text().contains("Commentary");
                     if (action->data().toInt() == chosen) selection = action;
                 }
                 if (selection) {
-                    menu->setActiveAction(selection);
-                    QTest::keyClick(menu, Qt::Key_Return);
-                } else QTest::keyClick(menu, Qt::Key_Escape);
-            });
-            QTest::keyClick(&window, Qt::Key_A);
+                    menu.setActiveAction(selection);
+                    QTest::keyClick(&menu, Qt::Key_Return);
+                } else QTest::keyClick(&menu, Qt::Key_Escape);
+            }));
             QCOMPARE(count, 2);
-            QCOMPARE(checked, previous);
+            QCOMPARE(checked, 2);
+            QCOMPARE(current, previous);
             QVERIFY(named);
             QCOMPARE(player->activeAudioTrack(), chosen < 0 ? previous : chosen);
             QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
@@ -397,6 +440,116 @@ private slots:
         }
         player->play();
         QTRY_VERIFY(player->position() > position + 300);
+    }
+    void trackCycling() {
+        const QString directory = temp.filePath("track cycling");
+        QVERIFY(QDir().mkpath(directory));
+        const QString first = directory + "/first.srt";
+        const QString second = directory + "/second.srt";
+        for (const auto &path : {first, second}) {
+            QFile srt(path);
+            QVERIFY(srt.open(QIODevice::WriteOnly));
+            srt.write("1\n00:00:00,000 --> 00:00:08,000\n" + QFileInfo(path).baseName().toUtf8() + "\n");
+        }
+        const QString movie = directory + "/movie.mkv";
+        const QString audio = directory + "/movie.ENG.ac3";
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", {"-hide_banner", "-loglevel", "error", "-i", clip,
+            "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-i", first,
+            "-map", "0:v", "-map", "0:a", "-map", "1:a", "-map", "2:0",
+            "-c:v", "copy", "-c:a", "aac", "-c:s", "srt", "-t", "8", "-y", movie,
+            "-map", "0:a", "-c:a", "ac3", "-y", audio});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        PlayerWindow window;
+        window.show();
+        QVERIFY(cycleTrack(window, Qt::Key_A));
+        QVERIFY(cycleTrack(window, Qt::Key_L));
+        window.openFile(movie);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *external = window.findChild<ExternalAudio *>();
+        auto *audioPlayer = window.findChild<QMediaPlayer *>("externalAudioPlayer");
+        auto *sink = player->videoSink();
+        QTRY_COMPARE_WITH_TIMEOUT(player->audioTracks().size(), 2, 10000);
+        QTRY_COMPARE(player->subtitleTracks().size(), 1);
+        QTRY_VERIFY(player->isPlaying() && sink->videoFrame().isValid());
+        player->pause();
+        external->seek(1500);
+        QTRY_VERIFY(qAbs(sink->videoFrame().startTime() / 1000 - 1500) < 100);
+        const qint64 position = player->position();
+
+        QVERIFY(selectTrack(window, 0, Qt::Key_A));
+        QVERIFY(cycleTrack(window, Qt::Key_A));
+        QCOMPARE(player->activeAudioTrack(), 1);
+        QVERIFY(cycleTrack(window, Qt::Key_A));
+        QCOMPARE(external->filePath(), audio);
+        QTRY_COMPARE(audioPlayer->playbackState(), QMediaPlayer::PausedState);
+        QVERIFY(cycleTrack(window, Qt::Key_A));
+        QVERIFY(external->filePath().isEmpty());
+        QCOMPARE(player->activeAudioTrack(), 0);
+
+        // Checkbox clicks and Space leave the popup open and playback untouched.
+        QVERIFY(toggleTrackCheck(window, 1, Qt::Key_A));
+        QVERIFY(toggleTrackCheck(window, audio, Qt::Key_A, true));
+        QCOMPARE(player->activeAudioTrack(), 0);
+        QVERIFY(external->filePath().isEmpty());
+        QVERIFY(cycleTrack(window, Qt::Key_A)); // Only the current track is checked.
+        QCOMPARE(player->activeAudioTrack(), 0);
+        QVERIFY(toggleTrackCheck(window, 0, Qt::Key_A));
+        QVERIFY(cycleTrack(window, Qt::Key_A)); // No checked tracks.
+        QCOMPARE(player->activeAudioTrack(), 0);
+        QVERIFY(toggleTrackCheck(window, 1, Qt::Key_A));
+        QVERIFY(cycleTrack(window, Qt::Key_A));
+        QCOMPARE(player->activeAudioTrack(), 1);
+        QVERIFY(selectTrack(window, 0, Qt::Key_A, true)); // Unchecked tracks can still be selected directly.
+        QCOMPARE(player->activeAudioTrack(), 0);
+        QVERIFY(cycleTrack(window, Qt::Key_A));
+        QCOMPARE(player->activeAudioTrack(), 1);
+        QVERIFY(cycleTrack(window, Qt::Key_A)); // Selecting the unchecked label did not re-enable it.
+        QCOMPARE(player->activeAudioTrack(), 1);
+
+        window.showFullScreen();
+        QVERIFY(selectSubtitle(window, -1));
+        QVERIFY(cycleTrack(window, Qt::Key_L));
+        QCOMPARE(player->activeSubtitleTrack(), 0);
+        QVERIFY(cycleTrack(window, Qt::Key_L));
+        QCOMPARE(player->activeSubtitleTrack(), -1);
+        QTRY_COMPARE(sink->subtitleText(), QString("first"));
+        QVERIFY(cycleTrack(window, Qt::Key_L));
+        QTRY_COMPARE(sink->subtitleText(), QString("second"));
+        QVERIFY(cycleTrack(window, Qt::Key_L));
+        QCOMPARE(player->activeSubtitleTrack(), -1);
+        QVERIFY(sink->subtitleText().isEmpty());
+        QVERIFY(toggleTrackCheck(window, 0, Qt::Key_L));
+        QVERIFY(toggleTrackCheck(window, first, Qt::Key_L));
+        QVERIFY(cycleTrack(window, Qt::Key_L));
+        QCOMPARE(sink->subtitleText(), QString("second"));
+        QVERIFY(toggleTrackCheck(window, -1, Qt::Key_L, true));
+        QVERIFY(cycleTrack(window, Qt::Key_L));
+        QCOMPARE(sink->subtitleText(), QString("second"));
+        QVERIFY(toggleTrackCheck(window, second, Qt::Key_L));
+        QVERIFY(cycleTrack(window, Qt::Key_L));
+        QCOMPARE(sink->subtitleText(), QString("second"));
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QVERIFY(qAbs(player->position() - position) < 100);
+
+        // A new video starts with every item checked again, including Off.
+        window.openFile(clip);
+        QTRY_COMPARE(player->audioTracks().size(), 1);
+        window.openFile(movie);
+        QTRY_COMPARE(player->audioTracks().size(), 2);
+        QTRY_VERIFY(player->isPlaying());
+        player->pause();
+        for (auto key : {Qt::Key_A, Qt::Key_L}) {
+            int checked = 0;
+            QVERIFY(withTrackMenu(window, key, [&](QMenu &menu) {
+                for (auto *action : menu.actions())
+                    if (action->isCheckable() && action->isChecked()) ++checked;
+                const QString capture = qEnvironmentVariable("VIDEO_PLAYER_TRACK_MENU_CAPTURE");
+                if (!capture.isEmpty()) menu.grab().save(capture + (key == Qt::Key_L ? "-subtitles.png" : "-audio.png"));
+            }));
+            QCOMPARE(checked, key == Qt::Key_L ? 4 : 3);
+        }
     }
     void subtitleParsing() {
         const QString path = temp.filePath("parser.srt");

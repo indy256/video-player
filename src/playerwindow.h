@@ -1,6 +1,7 @@
 #pragma once
 #include <QMainWindow>
 #include <QMediaPlayer>
+#include <QVariant>
 #include "subtitles.h"
 class QLabel;
 class QStackedWidget;
@@ -41,8 +42,8 @@ private:
     void chooseFile();
     void showPopupMenu(const QPoint &position);
     QAction *execPopupMenu(QMenu &menu, const QPoint &position);
-    void chooseAudioTrack();
-    void chooseSubtitles();
+    void chooseAudioTrack(bool cycle = false);
+    void chooseSubtitles(bool cycle = false);
     void updateSubtitles();
     void clearExternalSubtitles();
     void togglePlayback();
@@ -76,4 +77,6 @@ private:
     bool restoringVideoSettings = false;
     qint64 pendingPosition = -1;
     SubtitleTrack externalSubtitles;
+    QList<QVariant> excludedAudioTracks;
+    QList<QVariant> excludedSubtitles;
 };

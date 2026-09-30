@@ -6,7 +6,9 @@
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QMenu>
-#include <QActionGroup>
+#include <QKeyEvent>
+#include <QStyle>
+#include <QStyleOption>
 #include <QAudioOutput>
 #include <QApplication>
 #include <QTimer>
@@ -50,23 +52,128 @@ constexpr auto popupMenuStyle = R"(
 
 class TrackMenu final : public QMenu {
 public:
-    TrackMenu(QMediaPlayer *player, QWidget *parent, const QString &name, const QString &title)
-        : QMenu(parent), choices(this) {
+    TrackMenu(QMediaPlayer *player, QWidget *parent, const QString &name, const QString &title,
+              QList<QVariant> &excluded)
+        : QMenu(parent), excluded(excluded) {
         setObjectName(name);
         setAccessibleName(title);
         // Another instance can open a different file while a track menu is visible.
         connect(player, &QMediaPlayer::tracksChanged, this, &QMenu::close);
         connect(player, &QMediaPlayer::sourceChanged, this, &QMenu::close);
+        // Selecting a label must not change its inclusion in keyboard cycling.
+        connect(this, &QMenu::triggered, this, [this](QAction *action) {
+            if (action->isCheckable()) action->setChecked(!this->excluded.contains(action->data()));
+        });
     }
-    void addChoice(const QString &label, const QVariant &data, bool checked) {
+    void addChoice(const QString &label, const QVariant &data, bool current) {
         auto *action = addAction(QString(label).replace("&", "&&"));
         action->setData(data);
         action->setCheckable(true);
-        action->setChecked(checked);
-        choices.addAction(action);
+        action->setChecked(!excluded.contains(data));
+        if (current) {
+            currentChoice = action;
+            auto font = action->font();
+            font.setBold(true);
+            action->setFont(font);
+        }
+    }
+    void addTracks(const QList<QMediaMetaData> &tracks, int current, bool audio) {
+        for (int index = 0; index < tracks.size(); ++index)
+            addChoice(trackLabel(tracks[index], index, audio), index, index == current);
+    }
+    void addFiles(const QStringList &files, const QString &current) {
+        if (!files.isEmpty() && !isEmpty()) addSeparator();
+        for (const auto &file : files)
+            addChoice(QFileInfo(file).fileName(), file, file == current);
+    }
+    QAction *nextChoice() const {
+        const auto choices = actions();
+        const auto start = choices.indexOf(currentChoice);
+        for (qsizetype offset = 1; offset <= choices.size(); ++offset) {
+            auto *action = choices[(start + offset) % choices.size()];
+            if (action->isChecked()) return action == currentChoice ? nullptr : action;
+        }
+        return nullptr;
+    }
+protected:
+    void initStyleOption(QStyleOptionMenuItem *option, const QAction *action) const override {
+        QMenu::initStyleOption(option, action);
+        // Draw a checkbox below instead of the menu's plain check mark.
+        option->checked = false;
+    }
+    void paintEvent(QPaintEvent *event) override {
+        QMenu::paintEvent(event);
+        QPainter painter(this);
+        for (auto *action : actions()) {
+            if (!action->isCheckable()) continue;
+            QStyleOptionButton option;
+            option.initFrom(this);
+            option.rect = QRect(QPoint(), QSize(14, 14));
+            option.rect.moveCenter(checkboxRect(action).center());
+            option.state |= action->isChecked() ? QStyle::State_On : QStyle::State_Off;
+            style()->drawPrimitive(QStyle::PE_IndicatorCheckBox, &option, &painter, this);
+        }
+    }
+    void mousePressEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton) {
+            checkboxPress = checkboxAt(event->position().toPoint());
+            if (checkboxPress) {
+                setActiveAction(checkboxPress);
+                event->accept();
+                return;
+            }
+        }
+        QMenu::mousePressEvent(event);
+    }
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton && checkboxPress) {
+            if (checkboxAt(event->position().toPoint()) == checkboxPress) toggleChoice(checkboxPress);
+            checkboxPress = nullptr;
+            event->accept();
+            return;
+        }
+        QMenu::mouseReleaseEvent(event);
+    }
+    void keyPressEvent(QKeyEvent *event) override {
+        auto *action = activeAction();
+        if (event->key() == Qt::Key_Space && action && action->isCheckable()) {
+            toggleChoice(action);
+            event->accept();
+            return;
+        }
+        QMenu::keyPressEvent(event);
     }
 private:
-    QActionGroup choices;
+    static QString trackLabel(const QMediaMetaData &metadata, int index, bool audio) {
+        QStringList details{QString("Track %1").arg(index + 1)};
+        for (auto key : {QMediaMetaData::Title, QMediaMetaData::Language}) {
+            const QString value = metadata.stringValue(key);
+            if (!value.isEmpty()) details.append(value);
+        }
+        if (audio) {
+            const QString codec = metadata.stringValue(QMediaMetaData::AudioCodec);
+            if (!codec.isEmpty()) details.append(codec);
+        }
+        return details.join(" - ");
+    }
+    QRect checkboxRect(QAction *action) const {
+        const QRect row = actionGeometry(action);
+        // The shared popup style reserves 24 pixels to the left of each label.
+        const QRect checkbox(row.left(), row.top(), 24, row.height());
+        return QStyle::visualRect(layoutDirection(), row, checkbox);
+    }
+    QAction *checkboxAt(const QPoint &position) const {
+        auto *action = actionAt(position);
+        return action && action->isCheckable() && checkboxRect(action).contains(position) ? action : nullptr;
+    }
+    void toggleChoice(QAction *action) {
+        action->toggle();
+        if (action->isChecked()) excluded.removeAll(action->data());
+        else excluded.append(action->data());
+    }
+    QList<QVariant> &excluded;
+    QAction *currentChoice = nullptr;
+    QAction *checkboxPress = nullptr;
 };
 
 class FullscreenCloseButton final : public QAbstractButton {
@@ -105,17 +212,13 @@ QString timestamp(qint64 milliseconds) {
         .arg(seconds / 60 % 60, 2, 10, QLatin1Char('0')).arg(seconds % 60, 2, 10, QLatin1Char('0'));
 }
 
-QString trackLabel(const QMediaMetaData &metadata, int index, bool audio) {
-    QStringList details{QString("Track %1").arg(index + 1)};
-    for (auto key : {QMediaMetaData::Title, QMediaMetaData::Language}) {
-        const QString value = metadata.stringValue(key);
-        if (!value.isEmpty()) details.append(value);
-    }
-    if (audio) {
-        const QString codec = metadata.stringValue(QMediaMetaData::AudioCodec);
-        if (!codec.isEmpty()) details.append(codec);
-    }
-    return details.join(" - ");
+QStringList subtitleFiles(const QUrl &source) {
+    QStringList files;
+    if (!source.isLocalFile()) return files;
+    const QDir directory = QFileInfo(source.toLocalFile()).absoluteDir();
+    for (const auto &file : directory.entryInfoList(QDir::Files | QDir::Readable, QDir::Name | QDir::IgnoreCase))
+        if (file.suffix().compare("srt", Qt::CaseInsensitive) == 0) files.append(file.absoluteFilePath());
+    return files;
 }
 
 void setSubtitleText(QVideoSink *sink, const QString &text, bool paused) {
@@ -207,7 +310,9 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     player->setVideoOutput(video);
     connect(video->videoSink(), &QVideoSink::subtitleTextChanged, this, [this] {
         QTimer::singleShot(0, this, [this] {
-            if (!player->isPlaying()) {
+            // A queued embedded subtitle update may arrive after switching to an external file.
+            if (!externalSubtitles.filePath().isEmpty()) updateSubtitles();
+            else if (!player->isPlaying()) {
                 auto *sink = video->videoSink();
                 setSubtitleText(sink, sink->subtitleText(), true);
             }
@@ -312,8 +417,10 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         auto *action = new QShortcut(key, this); connect(action, &QShortcut::activated, this, callback);
     };
     shortcut(QKeySequence::Open, &PlayerWindow::chooseFile);
-    shortcut(QKeySequence(Qt::Key_A), &PlayerWindow::chooseAudioTrack);
-    shortcut(QKeySequence(Qt::Key_L), &PlayerWindow::chooseSubtitles);
+    shortcut(QKeySequence(Qt::Key_A), [this] { chooseAudioTrack(); });
+    shortcut(QKeySequence(Qt::Key_L), [this] { chooseSubtitles(); });
+    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_A), [this] { chooseAudioTrack(true); });
+    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_L), [this] { chooseSubtitles(true); });
     shortcut(QKeySequence(Qt::Key_Space), &PlayerWindow::togglePlayback);
     shortcut(QKeySequence(Qt::Key_Left), [this] { skip(-3000); });
     shortcut(QKeySequence(Qt::Key_Right), [this] { skip(3000); });
@@ -391,18 +498,12 @@ void PlayerWindow::showPopupMenu(const QPoint &position) {
     execPopupMenu(menu, position);
 }
 
-void PlayerWindow::chooseAudioTrack() {
-    TrackMenu menu(player, this, "audioTrackMenu", "Audio tracks");
-    const auto tracks = player->audioTracks();
-    for (int index = 0; index < tracks.size(); ++index)
-        menu.addChoice(trackLabel(tracks[index], index, true), index,
-            externalAudio->filePath().isEmpty() && index == player->activeAudioTrack());
-    const auto files = ExternalAudio::matchingFiles(player->source());
-    if (!tracks.isEmpty() && !files.isEmpty()) menu.addSeparator();
-    for (const auto &file : files)
-        menu.addChoice(QFileInfo(file).fileName(), file, file == externalAudio->filePath());
-    if (tracks.isEmpty() && files.isEmpty()) menu.addAction("No audio tracks available")->setEnabled(false);
-    const auto *selected = execPopupMenu(menu, mapToGlobal(rect().center()));
+void PlayerWindow::chooseAudioTrack(bool cycle) {
+    TrackMenu menu(player, this, "audioTrackMenu", "Audio tracks", excludedAudioTracks);
+    menu.addTracks(player->audioTracks(), externalAudio->filePath().isEmpty() ? player->activeAudioTrack() : -1, true);
+    menu.addFiles(ExternalAudio::matchingFiles(player->source()), externalAudio->filePath());
+    if (menu.isEmpty()) menu.addAction("No audio tracks available")->setEnabled(false);
+    const auto *selected = cycle ? menu.nextChoice() : execPopupMenu(menu, mapToGlobal(rect().center()));
     if (!selected || !selected->data().isValid()) return;
     if (selected->data().metaType().id() == QMetaType::QString)
         externalAudio->select(selected->data().toString());
@@ -412,25 +513,13 @@ void PlayerWindow::chooseAudioTrack() {
     }
 }
 
-void PlayerWindow::chooseSubtitles() {
-    TrackMenu menu(player, this, "subtitleMenu", "Subtitles");
+void PlayerWindow::chooseSubtitles(bool cycle) {
+    TrackMenu menu(player, this, "subtitleMenu", "Subtitles", excludedSubtitles);
     const bool embedded = externalSubtitles.filePath().isEmpty();
     menu.addChoice("Off", -1, embedded && player->activeSubtitleTrack() < 0);
-    const auto tracks = player->subtitleTracks();
-    for (int index = 0; index < tracks.size(); ++index)
-        menu.addChoice(trackLabel(tracks[index], index, false), index,
-            embedded && index == player->activeSubtitleTrack());
-    if (player->source().isLocalFile()) {
-        bool separator = false;
-        const QDir directory = QFileInfo(player->source().toLocalFile()).absoluteDir();
-        for (const auto &file : directory.entryInfoList(QDir::Files | QDir::Readable, QDir::Name | QDir::IgnoreCase)) {
-            if (file.suffix().compare("srt", Qt::CaseInsensitive) != 0) continue;
-            if (!separator) { menu.addSeparator(); separator = true; }
-            menu.addChoice(file.fileName(), file.absoluteFilePath(),
-                file.absoluteFilePath() == externalSubtitles.filePath());
-        }
-    }
-    const auto *selected = execPopupMenu(menu, mapToGlobal(rect().center()));
+    menu.addTracks(player->subtitleTracks(), embedded ? player->activeSubtitleTrack() : -1, false);
+    menu.addFiles(subtitleFiles(player->source()), externalSubtitles.filePath());
+    const auto *selected = cycle ? menu.nextChoice() : execPopupMenu(menu, mapToGlobal(rect().center()));
     if (!selected) return;
     if (selected->data().metaType().id() == QMetaType::QString) {
         QString error;
@@ -467,6 +556,8 @@ void PlayerWindow::openFile(const QString &path) {
     savePosition();
     clearExternalSubtitles();
     externalAudio->clear();
+    excludedAudioTracks.clear();
+    excludedSubtitles.clear();
     pendingPosition = -1;
     clickTimer->stop();
     timeline->setSliderDown(false);
