@@ -1,4 +1,5 @@
 #pragma once
+#include <QElapsedTimer>
 #include <QObject>
 #include <QVideoSink>
 
@@ -21,6 +22,8 @@ private:
     QMediaPlayer *video;
     QMediaPlayer *reader;
     QVideoSink sink;
+    QElapsedTimer playbackClock;
+    qint64 clockPosition = 0;
     int selected = -1;
     bool ready = false;
     qint64 finishedAt = -1;

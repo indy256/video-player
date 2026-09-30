@@ -722,6 +722,11 @@ private slots:
         auto *reader = window.findChild<QMediaPlayer *>("subtitlePlayer");
         QCOMPARE(reader->activeAudioTrack(), -1);
         QCOMPARE(reader->activeVideoTrack(), -1);
+        QSignalSpy subtitleStatuses(reader, &QMediaPlayer::mediaStatusChanged);
+        QTRY_VERIFY(player->position() >= 1600);
+        QCOMPARE(sink->subtitleText(), QString("First external"));
+        for (const auto &status : subtitleStatuses)
+            QVERIFY(status.first().value<QMediaPlayer::MediaStatus>() != QMediaPlayer::LoadedMedia);
         gamma->setValue(16);
         QCOMPARE(sink->subtitleText(), QString("First external"));
         gamma->setValue(10);

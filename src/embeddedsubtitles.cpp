@@ -37,6 +37,7 @@ void EmbeddedSubtitles::clear() {
     selected = -1;
     ready = false;
     finishedAt = -1;
+    playbackClock.invalidate();
     reader->stop();
     reader->setSource({});
     sink.setSubtitleText({});
@@ -50,6 +51,7 @@ void EmbeddedSubtitles::synchronize() {
     if (!ready) return;
     if (selected < 0) {
         reader->pause();
+        playbackClock.invalidate();
         return;
     }
     const bool trackChanged = reader->activeSubtitleTrack() != selected;
@@ -57,17 +59,27 @@ void EmbeddedSubtitles::synchronize() {
     if (video->playbackState() == QMediaPlayer::StoppedState) {
         reader->stop();
         finishedAt = -1;
+        playbackClock.invalidate();
         return;
     }
     const qint64 position = video->position();
     // Subtitles often end before the movie. Resume reading only after seeking back or selecting a track.
     if (finishedAt >= 0 && !trackChanged && position >= finishedAt) return;
     finishedAt = -1;
-    reader->setPlaybackRate(video->playbackRate());
+    // A subtitle-only reader reports caption timestamps, not a continuous position.
+    // Measure drift against elapsed playback time so sparse captions do not cause seeks.
+    const qint64 expectedPosition = playbackClock.isValid()
+        ? clockPosition + qRound64(playbackClock.elapsed() * reader->playbackRate()) : reader->position();
     const bool playing = video->isPlaying();
     if (!playing) reader->pause();
-    if (trackChanged || (playing && !reader->isPlaying()) || (!playing && reader->position() != position)
-        || qAbs(reader->position() - position) > 250)
-        reader->setPosition(position);
+    const bool seek = trackChanged || (playing && !reader->isPlaying())
+        || (!playing && reader->position() != position) || qAbs(expectedPosition - position) > 250;
+    if (seek) reader->setPosition(position);
+    if (seek || reader->playbackRate() != video->playbackRate()) {
+        clockPosition = seek ? position : expectedPosition;
+        playbackClock.restart();
+    }
+    reader->setPlaybackRate(video->playbackRate());
     if (playing) reader->play();
+    else playbackClock.invalidate();
 }
