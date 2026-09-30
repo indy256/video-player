@@ -2,6 +2,7 @@
 #include "seekslider.h"
 #include "updater.h"
 #include "gammafilter.h"
+#include "externalaudio.h"
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QMenu>
@@ -148,6 +149,10 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     const int savedVolume = qBound(0, QSettings().value("audio/volume", 70).toInt(), 100);
     audio->setVolume(savedVolume / 100.f);
     player->setAudioOutput(audio);
+    externalAudio = new ExternalAudio(player, this);
+    connect(externalAudio, &ExternalAudio::failed, this, [this](const QString &message) {
+        QMessageBox::warning(this, "Cannot play external audio", message);
+    }, Qt::QueuedConnection);
     auto *page = new QWidget(this);
     setCentralWidget(page);
     auto *layout = new QVBoxLayout(page);
@@ -390,10 +395,21 @@ void PlayerWindow::chooseAudioTrack() {
     TrackMenu menu(player, this, "audioTrackMenu", "Audio tracks");
     const auto tracks = player->audioTracks();
     for (int index = 0; index < tracks.size(); ++index)
-        menu.addChoice(trackLabel(tracks[index], index, true), index, index == player->activeAudioTrack());
-    if (tracks.isEmpty()) menu.addAction("No audio tracks available")->setEnabled(false);
+        menu.addChoice(trackLabel(tracks[index], index, true), index,
+            externalAudio->filePath().isEmpty() && index == player->activeAudioTrack());
+    const auto files = ExternalAudio::matchingFiles(player->source());
+    if (!tracks.isEmpty() && !files.isEmpty()) menu.addSeparator();
+    for (const auto &file : files)
+        menu.addChoice(QFileInfo(file).fileName(), file, file == externalAudio->filePath());
+    if (tracks.isEmpty() && files.isEmpty()) menu.addAction("No audio tracks available")->setEnabled(false);
     const auto *selected = execPopupMenu(menu, mapToGlobal(rect().center()));
-    if (selected && selected->data().isValid()) player->setActiveAudioTrack(selected->data().toInt());
+    if (!selected || !selected->data().isValid()) return;
+    if (selected->data().metaType().id() == QMetaType::QString)
+        externalAudio->select(selected->data().toString());
+    else {
+        externalAudio->clear();
+        player->setActiveAudioTrack(selected->data().toInt());
+    }
 }
 
 void PlayerWindow::chooseSubtitles() {
@@ -450,6 +466,7 @@ void PlayerWindow::openFile(const QString &path) {
     }
     savePosition();
     clearExternalSubtitles();
+    externalAudio->clear();
     pendingPosition = -1;
     clickTimer->stop();
     timeline->setSliderDown(false);
@@ -506,7 +523,7 @@ void PlayerWindow::restorePosition() {
         || player->error() != QMediaPlayer::NoError) return;
     const qint64 position = pendingPosition < player->duration() ? pendingPosition : 0;
     pendingPosition = -1;
-    player->setPosition(position);
+    externalAudio->seek(position);
 }
 
 void PlayerWindow::closeEvent(QCloseEvent *event) {
@@ -514,6 +531,8 @@ void PlayerWindow::closeEvent(QCloseEvent *event) {
     controlsTimer->stop();
     fullscreenClose->hide();
     savePosition();
+    externalAudio->clear();
+    player->stop();
     QMainWindow::closeEvent(event);
 }
 
@@ -528,7 +547,7 @@ void PlayerWindow::togglePlayback() {
     if (!playbackReady()) return;
     if (player->isPlaying()) player->pause();
     else {
-        if (player->mediaStatus() == QMediaPlayer::EndOfMedia) player->setPosition(0);
+        if (player->mediaStatus() == QMediaPlayer::EndOfMedia) externalAudio->seek(0);
         player->play();
     }
 }
@@ -719,12 +738,12 @@ void PlayerWindow::updateTimeline() {
 }
 
 void PlayerWindow::seekToSlider() {
-    if (player->isSeekable()) player->setPosition(qRound64(timeline->value() * (double(player->duration()) / timelineSteps)));
+    if (player->isSeekable()) externalAudio->seek(qRound64(timeline->value() * (double(player->duration()) / timelineSteps)));
     updateTimeline();
 }
 
 void PlayerWindow::skip(qint64 delta) {
-    if (timeline->isEnabled()) player->setPosition(qBound(qint64(0), player->position() + delta, player->duration()));
+    if (timeline->isEnabled()) externalAudio->seek(qBound(qint64(0), player->position() + delta, player->duration()));
 }
 
 void PlayerWindow::dragEnterEvent(QDragEnterEvent *event) {

@@ -1,6 +1,7 @@
 #include "playerwindow.h"
 #include "seekslider.h"
 #include "gammafilter.h"
+#include "externalaudio.h"
 #include <QApplication>
 #include <QAbstractButton>
 #include <QFile>
@@ -16,6 +17,10 @@
 #include <QVideoWidget>
 #include <QStackedWidget>
 #include <QAudioOutput>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+#include <QAudioBufferOutput>
+#include <QAudioBuffer>
+#endif
 #include <QWheelEvent>
 #include <QContextMenuEvent>
 #include <QCursor>
@@ -26,6 +31,25 @@
 #include <QTimer>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
+#endif
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+struct AudioSamples {
+    int count = 0;
+    int gaps = 0;
+    float peak = 0;
+    qint64 end = -1;
+
+    void add(const QAudioBuffer &buffer) {
+        if (!buffer.isValid()) return;
+        ++count;
+        if (end >= 0 && qAbs(buffer.startTime() - end) > 2000) ++gaps;
+        end = buffer.startTime() + buffer.duration();
+        if (buffer.format().sampleFormat() == QAudioFormat::Float)
+            for (int i = 0; i < buffer.sampleCount(); ++i)
+                peak = qMax(peak, qAbs(buffer.constData<float>()[i]));
+    }
+};
 #endif
 
 class DiagnosticApplication : public QApplication {
@@ -71,12 +95,12 @@ class PlayerTests : public QObject {
 private:
     QTemporaryDir temp;
     QString clip;
-    bool selectSubtitle(PlayerWindow &window, const QVariant &choice) {
+    bool selectTrack(PlayerWindow &window, const QVariant &choice, Qt::Key key = Qt::Key_L) {
         window.activateWindow();
         if (!QTest::qWaitForWindowActive(&window)) return false;
         bool found = false;
         QTimer::singleShot(0, &window, [&] {
-            auto *menu = window.findChild<QMenu *>("subtitleMenu");
+            auto *menu = window.findChild<QMenu *>(key == Qt::Key_L ? "subtitleMenu" : "audioTrackMenu");
             if (!menu) return;
             for (auto *action : menu->actions()) {
                 if (!action->isCheckable() || action->data() != choice) continue;
@@ -87,8 +111,11 @@ private:
             }
             menu->close();
         });
-        QTest::keyClick(&window, Qt::Key_L);
+        QTest::keyClick(&window, key);
         return found;
+    }
+    bool selectSubtitle(PlayerWindow &window, const QVariant &choice) {
+        return selectTrack(window, choice);
     }
 private slots:
     void initTestCase() {
@@ -128,6 +155,177 @@ private slots:
             QApplication::sendEvent(surface, &event);
             QVERIFY(found);
         }
+    }
+    void externalAudioSelection() {
+        const QString directory = temp.filePath("external audio");
+        QVERIFY(QDir().mkpath(directory));
+        const QString movie = directory + "/movie.test.mp4";
+        const QString track = directory + "/movie.test.ENG.AC3";
+        QVERIFY(QFile::copy(clip, movie));
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", {"-hide_banner", "-loglevel", "error", "-i", clip,
+            "-vn", "-c:a", "ac3", "-t", "5", "-y", track});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        for (const QString &name : {"other.ac3", "movie.test.srt", "movie.test.txt"}) {
+            QFile file(directory + "/" + name);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+        }
+        QCOMPARE(ExternalAudio::matchingFiles(QUrl::fromLocalFile(movie)), QStringList{track});
+        PlayerWindow window;
+        window.show();
+        window.openFile(movie);
+        auto *video = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *audio = window.findChild<QMediaPlayer *>("externalAudioPlayer");
+        auto *external = window.findChild<ExternalAudio *>();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        QAudioBufferOutput buffers;
+        audio->setAudioBufferOutput(&buffers);
+        AudioSamples samples;
+        connect(&buffers, &QAudioBufferOutput::audioBufferReceived, &buffers,
+            [&](const QAudioBuffer &buffer) { samples.add(buffer); });
+#endif
+        QTRY_VERIFY(video->isSeekable());
+        video->pause();
+        external->seek(2000);
+        QSignalSpy trackChanges(video, &QMediaPlayer::activeTracksChanged);
+        QSignalSpy rateChanges(audio, &QMediaPlayer::playbackRateChanged);
+        QVERIFY(selectTrack(window, track, Qt::Key_A));
+        QTRY_COMPARE(audio->playbackState(), QMediaPlayer::PausedState);
+        QCOMPARE(video->activeAudioTrack(), 0);
+        QVERIFY(!video->audioOutput()->isMuted());
+        QVERIFY(audio->audioOutput()->isMuted());
+        QVERIFY(trackChanges.isEmpty());
+        QCOMPARE(audio->position(), video->position());
+        QCOMPARE(external->filePath(), track);
+        external->seek(1000);
+        QTRY_COMPARE(audio->position(), qint64(1000));
+        window.findChild<QSlider *>("volume")->setValue(23);
+        QCOMPARE(audio->audioOutput()->volume(), 0.23f);
+        video->play();
+        QTRY_VERIFY(audio->isPlaying());
+        QTRY_VERIFY(video->audioOutput()->isMuted());
+        QVERIFY(!audio->audioOutput()->isMuted());
+        QVERIFY(trackChanges.isEmpty());
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        QTRY_VERIFY(samples.count >= 5);
+#endif
+        QTest::qWait(600);
+        QVERIFY(qAbs(audio->position() - video->position()) < 250);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        // Introduce clock drift. Correcting it must not skip decoded audio.
+        audio->setPosition(video->position() - 400);
+        QTest::qWait(100);
+        samples = {};
+        QTest::qWait(1500);
+        QVERIFY(samples.count > 0);
+        QCOMPARE(samples.gaps, 0);
+#endif
+        QVERIFY(rateChanges.isEmpty());
+        external->seek(3500);
+        QTRY_VERIFY(qAbs(audio->position() - video->position()) < 250);
+        video->pause();
+        QTRY_COMPARE(audio->playbackState(), QMediaPlayer::PausedState);
+        QTRY_COMPARE(audio->position(), video->position());
+        auto *timeline = window.findChild<SeekSlider *>("timeline");
+        timeline->setValue(timeline->maximum() / 4);
+        QTRY_COMPARE(audio->position(), video->duration() / 4);
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QTest::keyClick(&window, Qt::Key_Left);
+        QTRY_COMPARE(video->position(), qint64(0));
+        QTRY_COMPARE(audio->position(), qint64(0));
+        external->seek(6000);
+        video->play();
+        QTest::qWait(200);
+        QVERIFY(!audio->isPlaying());
+        external->seek(1000);
+        QTRY_VERIFY(audio->isPlaying());
+        QVERIFY(selectTrack(window, 0, Qt::Key_A));
+        QCOMPARE(video->activeAudioTrack(), 0);
+        QVERIFY(!video->audioOutput()->isMuted());
+        QVERIFY(audio->audioOutput()->isMuted());
+        QCOMPARE(video->playbackRate(), qreal(1));
+        QVERIFY(audio->source().isEmpty());
+        QVERIFY(external->filePath().isEmpty());
+        QVERIFY(selectTrack(window, track, Qt::Key_A));
+        QTRY_VERIFY(audio->isPlaying());
+        window.openFile(clip);
+        QVERIFY(audio->source().isEmpty());
+        QVERIFY(external->filePath().isEmpty());
+        QTRY_VERIFY(video->isPlaying());
+        QTest::qWait(250);
+        QVERIFY(!video->audioOutput()->isMuted());
+        window.close();
+        QVERIFY(!audio->isPlaying());
+    }
+    void externalAudioFailure() {
+        QMediaPlayer video;
+        QAudioOutput output;
+        video.setAudioOutput(&output);
+        ExternalAudio external(&video);
+        QSignalSpy errors(&external, &ExternalAudio::failed);
+        video.setSource(QUrl::fromLocalFile(clip));
+        QTRY_VERIFY(!video.audioTracks().isEmpty());
+        const int track = video.activeAudioTrack();
+        external.select(temp.filePath("missing.ac3"));
+        QTRY_COMPARE(errors.size(), 1);
+        QVERIFY(external.filePath().isEmpty());
+        QCOMPARE(video.activeAudioTrack(), track);
+    }
+    void externalAudioExample() {
+        const QString path = qEnvironmentVariable("VIDEO_PLAYER_AUDIO_EXAMPLE");
+        if (path.isEmpty()) QSKIP("Set VIDEO_PLAYER_AUDIO_EXAMPLE to a video with matching external audio");
+        const auto files = ExternalAudio::matchingFiles(QUrl::fromLocalFile(path));
+        QVERIFY(!files.isEmpty());
+        PlayerWindow window;
+        window.show();
+        window.openFile(path);
+        auto *video = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *audio = window.findChild<QMediaPlayer *>("externalAudioPlayer");
+        auto *external = window.findChild<ExternalAudio *>();
+        QSignalSpy rateChanges(audio, &QMediaPlayer::playbackRateChanged);
+        QSignalSpy trackChanges(video, &QMediaPlayer::activeTracksChanged);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        QAudioBufferOutput buffers;
+        const bool probe = !qEnvironmentVariableIsSet("VIDEO_PLAYER_AUDIO_NO_PROBE");
+        if (probe) audio->setAudioBufferOutput(&buffers);
+        AudioSamples samples;
+        connect(&buffers, &QAudioBufferOutput::audioBufferReceived, &buffers,
+            [&](const QAudioBuffer &buffer) { samples.add(buffer); });
+#endif
+        QTRY_VERIFY_WITH_TIMEOUT(video->isSeekable(), 15000);
+        window.findChild<QSlider *>("gamma")->setValue(16);
+        window.findChild<QSlider *>("volume")->setValue(35);
+        external->seek(3840000);
+        rateChanges.clear();
+        trackChanges.clear();
+        QVERIFY(selectTrack(window, files.first(), Qt::Key_A));
+        QTRY_COMPARE_WITH_TIMEOUT(audio->playbackState(), QMediaPlayer::PlayingState, 15000);
+        QCOMPARE(video->activeAudioTrack(), 0);
+        QTRY_VERIFY(audio->isPlaying());
+        QTRY_VERIFY(video->audioOutput()->isMuted());
+        QVERIFY(!audio->audioOutput()->isMuted());
+        QTest::qWait(11000);
+        QVERIFY(rateChanges.isEmpty());
+        QVERIFY(trackChanges.isEmpty());
+        QVERIFY(qAbs(audio->position() - video->position()) < 250);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        QCOMPARE(samples.gaps, 0);
+        QVERIFY2(!probe || (samples.count > 100 && samples.peak > 0.001f),
+            "External audio must deliver non-silent samples continuously after selecting at 64 minutes");
+        samples = {};
+#endif
+        external->seek(1800000);
+        QTest::qWait(1500);
+        QVERIFY(qAbs(audio->position() - video->position()) < 250);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        QVERIFY2(!probe || (samples.count > 20 && samples.peak > 0.001f),
+            "External audio must deliver non-silent samples after seeking to 30 minutes");
+#endif
+        QVERIFY(selectTrack(window, 0, Qt::Key_A));
+        QVERIFY(audio->source().isEmpty());
+        window.close();
     }
     void audioTrackSelection() {
         const QString multiAudio = temp.filePath("two audio tracks.mkv");

@@ -12,6 +12,7 @@ class QTimer;
 class QSlider;
 class QContextMenuEvent;
 class QAbstractButton;
+class ExternalAudio;
 
 class PlayerWindow : public QMainWindow {
     Q_OBJECT
@@ -51,6 +52,7 @@ private:
     void skip(qint64 delta);
     void adjustVolume(int steps);
     QMediaPlayer *player;
+    ExternalAudio *externalAudio;
     QVideoWidget *video;
     QStackedWidget *stage;
     QLabel *statusLabel;

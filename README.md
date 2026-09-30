@@ -56,6 +56,8 @@ Paused-only follow-up: set `VIDEO_PLAYER_RESIZE_PAUSED_ONLY=1` alongside the dia
 
 ## Controls
 
+Press A to select embedded audio or an audio file in the video's directory whose name starts with the video's name without its extension. For example, `movie.ENG.ac3` accompanies `movie.avi`. Matching is case-insensitive; supported extensions include AC3, EAC3, DTS, AAC, M4A, MKA, MP3, FLAC, WAV, OGG, and Opus (decoding depends on FFmpeg support). External audio follows playback, seeking, and volume. Selecting an embedded track switches back; opening another video clears the external selection. Audio files are assumed to start at the same time as the video.
+
 Volume and gamma are saved separately for each video's canonical file path whenever they change, including zero volume and neutral gamma. Reopening a video restores both settings, including after restarting the app. New videos use the last chosen volume (initially 70%) and gamma 1.0.
 
 The gamma slider adjusts video midtones from 0.1 to 4.0: values above 1.0 lighten the picture and values below 1.0 darken it. Double-click the slider to reset it to 1.0 (unchanged). Changes apply immediately, including while paused, and the slider is available with the fullscreen controls. Gamma does not alter video files. At 1.0, video output bypasses the filter entirely. Non-neutral gamma converts and adjusts frames on the CPU, which can increase the cost of high-resolution playback.
@@ -68,7 +70,7 @@ Press L to choose an embedded subtitle track or any `.srt` file beside the curre
 | --- | --- |
 | Right-click → Open video / Ctrl+O | Choose a local file |
 | Space | Play or pause |
-| A | Show audio tracks and select the track to play |
+| A | Choose an embedded audio track or a matching audio file beside the video |
 | L | Choose embedded subtitles or an `.srt` file in the video's folder; select Off to hide subtitles |
 | Left-click video | After release, play or pause once the system double-click interval expires, only if no drag occurred |
 | Double-click video | Toggle fullscreen without briefly pausing or resuming playback |
