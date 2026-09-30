@@ -21,6 +21,8 @@
 #include <QLabel>
 #include <QMimeData>
 #include <QMediaMetaData>
+#include <QDir>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QPushButton>
@@ -44,6 +46,27 @@ constexpr auto popupMenuStyle = R"(
     QMenu::item:selected { background: #33415b; }
     QMenu::item:disabled { color: #596173; }
 )";
+
+class TrackMenu final : public QMenu {
+public:
+    TrackMenu(QMediaPlayer *player, QWidget *parent, const QString &name, const QString &title)
+        : QMenu(parent), choices(this) {
+        setObjectName(name);
+        setAccessibleName(title);
+        // Another instance can open a different file while a track menu is visible.
+        connect(player, &QMediaPlayer::tracksChanged, this, &QMenu::close);
+        connect(player, &QMediaPlayer::sourceChanged, this, &QMenu::close);
+    }
+    void addChoice(const QString &label, const QVariant &data, bool checked) {
+        auto *action = addAction(QString(label).replace("&", "&&"));
+        action->setData(data);
+        action->setCheckable(true);
+        action->setChecked(checked);
+        choices.addAction(action);
+    }
+private:
+    QActionGroup choices;
+};
 
 class FullscreenCloseButton final : public QAbstractButton {
 public:
@@ -79,6 +102,33 @@ QString timestamp(qint64 milliseconds) {
     const qint64 seconds = qMax(qint64(0), milliseconds) / 1000;
     return QString("%1:%2:%3").arg(seconds / 3600, 2, 10, QLatin1Char('0'))
         .arg(seconds / 60 % 60, 2, 10, QLatin1Char('0')).arg(seconds % 60, 2, 10, QLatin1Char('0'));
+}
+
+QString trackLabel(const QMediaMetaData &metadata, int index, bool audio) {
+    QStringList details{QString("Track %1").arg(index + 1)};
+    for (auto key : {QMediaMetaData::Title, QMediaMetaData::Language}) {
+        const QString value = metadata.stringValue(key);
+        if (!value.isEmpty()) details.append(value);
+    }
+    if (audio) {
+        const QString codec = metadata.stringValue(QMediaMetaData::AudioCodec);
+        if (!codec.isEmpty()) details.append(codec);
+    }
+    return details.join(" - ");
+}
+
+void setSubtitleText(QVideoSink *sink, const QString &text, bool paused) {
+    if (sink->subtitleText() == text && (!paused || sink->videoFrame().subtitleText() == text)) return;
+    sink->setSubtitleText(text);
+    if (paused) {
+        // Qt applies subtitle text when a new frame arrives. Refresh the existing
+        // frame as well so selecting, disabling, and seeking work while paused.
+        const QVideoFrame frame = sink->videoFrame();
+        if (frame.isValid()) {
+            sink->setVideoFrame({});
+            sink->setVideoFrame(frame);
+        }
+    }
 }
 }
 
@@ -150,6 +200,14 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     });
     auto *gammaFilter = new GammaFilter(video->videoSink(), this);
     player->setVideoOutput(video);
+    connect(video->videoSink(), &QVideoSink::subtitleTextChanged, this, [this] {
+        QTimer::singleShot(0, this, [this] {
+            if (!player->isPlaying()) {
+                auto *sink = video->videoSink();
+                setSubtitleText(sink, sink->subtitleText(), true);
+            }
+        });
+    });
     layout->addWidget(stage, 1);
     timeline = new SeekSlider;
     timeline->setObjectName("timeline");
@@ -200,6 +258,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         gamma->setToolTip(text + " (double-click to reset)");
         saveVideoSettings();
         gammaFilter->apply(player, value);
+        updateSubtitles();
     });
     layout->addWidget(controlsPanel);
     fullscreenClose = new FullscreenCloseButton(this);
@@ -232,6 +291,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(timeline, &QSlider::valueChanged, this, &PlayerWindow::seekToSlider);
     connect(timeline, &QSlider::sliderReleased, this, &PlayerWindow::updateTimeline);
     connect(player, &QMediaPlayer::positionChanged, this, &PlayerWindow::updateTimeline);
+    connect(player, &QMediaPlayer::positionChanged, this, &PlayerWindow::updateSubtitles);
+    connect(player, &QMediaPlayer::playbackStateChanged, this, &PlayerWindow::updateSubtitles);
     connect(player, &QMediaPlayer::metaDataChanged, this, &PlayerWindow::updateTimeline);
     connect(player, &QMediaPlayer::durationChanged, this, [this] { updateControls(); updateTimeline(); });
     connect(player, &QMediaPlayer::seekableChanged, this, &PlayerWindow::updateControls);
@@ -247,6 +308,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     };
     shortcut(QKeySequence::Open, &PlayerWindow::chooseFile);
     shortcut(QKeySequence(Qt::Key_A), &PlayerWindow::chooseAudioTrack);
+    shortcut(QKeySequence(Qt::Key_L), &PlayerWindow::chooseSubtitles);
     shortcut(QKeySequence(Qt::Key_Space), &PlayerWindow::togglePlayback);
     shortcut(QKeySequence(Qt::Key_Left), [this] { skip(-3000); });
     shortcut(QKeySequence(Qt::Key_Right), [this] { skip(3000); });
@@ -325,29 +387,59 @@ void PlayerWindow::showPopupMenu(const QPoint &position) {
 }
 
 void PlayerWindow::chooseAudioTrack() {
-    QMenu menu(this);
-    menu.setObjectName("audioTrackMenu");
-    menu.setAccessibleName("Audio tracks");
-    QActionGroup group(&menu);
+    TrackMenu menu(player, this, "audioTrackMenu", "Audio tracks");
     const auto tracks = player->audioTracks();
-    for (int index = 0; index < tracks.size(); ++index) {
-        QStringList details{QString("Track %1").arg(index + 1)};
-        for (auto key : {QMediaMetaData::Title, QMediaMetaData::Language, QMediaMetaData::AudioCodec}) {
-            const QString value = tracks[index].stringValue(key);
-            if (!value.isEmpty()) details.append(value);
-        }
-        auto *action = menu.addAction(details.join(" - ").replace("&", "&&"));
-        action->setData(index);
-        action->setCheckable(true);
-        action->setChecked(index == player->activeAudioTrack());
-        group.addAction(action);
-    }
+    for (int index = 0; index < tracks.size(); ++index)
+        menu.addChoice(trackLabel(tracks[index], index, true), index, index == player->activeAudioTrack());
     if (tracks.isEmpty()) menu.addAction("No audio tracks available")->setEnabled(false);
-    // A file opened through another instance can change tracks while the menu is open.
-    connect(player, &QMediaPlayer::tracksChanged, &menu, &QMenu::close);
-    connect(player, &QMediaPlayer::sourceChanged, &menu, &QMenu::close);
     const auto *selected = execPopupMenu(menu, mapToGlobal(rect().center()));
     if (selected && selected->data().isValid()) player->setActiveAudioTrack(selected->data().toInt());
+}
+
+void PlayerWindow::chooseSubtitles() {
+    TrackMenu menu(player, this, "subtitleMenu", "Subtitles");
+    const bool embedded = externalSubtitles.filePath().isEmpty();
+    menu.addChoice("Off", -1, embedded && player->activeSubtitleTrack() < 0);
+    const auto tracks = player->subtitleTracks();
+    for (int index = 0; index < tracks.size(); ++index)
+        menu.addChoice(trackLabel(tracks[index], index, false), index,
+            embedded && index == player->activeSubtitleTrack());
+    if (player->source().isLocalFile()) {
+        bool separator = false;
+        const QDir directory = QFileInfo(player->source().toLocalFile()).absoluteDir();
+        for (const auto &file : directory.entryInfoList(QDir::Files | QDir::Readable, QDir::Name | QDir::IgnoreCase)) {
+            if (file.suffix().compare("srt", Qt::CaseInsensitive) != 0) continue;
+            if (!separator) { menu.addSeparator(); separator = true; }
+            menu.addChoice(file.fileName(), file.absoluteFilePath(),
+                file.absoluteFilePath() == externalSubtitles.filePath());
+        }
+    }
+    const auto *selected = execPopupMenu(menu, mapToGlobal(rect().center()));
+    if (!selected) return;
+    if (selected->data().metaType().id() == QMetaType::QString) {
+        QString error;
+        if (!externalSubtitles.load(selected->data().toString(), error)) {
+            QMessageBox::warning(this, "Cannot load subtitles", error);
+            return;
+        }
+        player->setActiveSubtitleTrack(-1);
+        updateSubtitles();
+    } else {
+        clearExternalSubtitles();
+        player->setActiveSubtitleTrack(selected->data().toInt());
+    }
+}
+
+void PlayerWindow::updateSubtitles() {
+    if (externalSubtitles.filePath().isEmpty()) return;
+    const QString text = player->playbackState() == QMediaPlayer::StoppedState
+        ? QString() : externalSubtitles.textAt(player->position());
+    setSubtitleText(player->videoSink(), text, !player->isPlaying());
+}
+
+void PlayerWindow::clearExternalSubtitles() {
+    externalSubtitles.clear();
+    setSubtitleText(player->videoSink(), {}, !player->isPlaying());
 }
 
 void PlayerWindow::openFile(const QString &path) {
@@ -357,6 +449,7 @@ void PlayerWindow::openFile(const QString &path) {
         return;
     }
     savePosition();
+    clearExternalSubtitles();
     pendingPosition = -1;
     clickTimer->stop();
     timeline->setSliderDown(false);

@@ -1,6 +1,7 @@
 #pragma once
 #include <QMainWindow>
 #include <QMediaPlayer>
+#include "subtitles.h"
 class QLabel;
 class QStackedWidget;
 class QVideoWidget;
@@ -40,6 +41,9 @@ private:
     void showPopupMenu(const QPoint &position);
     QAction *execPopupMenu(QMenu &menu, const QPoint &position);
     void chooseAudioTrack();
+    void chooseSubtitles();
+    void updateSubtitles();
+    void clearExternalSubtitles();
     void togglePlayback();
     void updateControls();
     void updateTimeline();
@@ -69,4 +73,5 @@ private:
     QString fileKey;
     bool restoringVideoSettings = false;
     qint64 pendingPosition = -1;
+    SubtitleTrack externalSubtitles;
 };

@@ -21,6 +21,8 @@
 #include <QCursor>
 #include <QMenu>
 #include <QMediaMetaData>
+#include <QDir>
+#include <QPainter>
 #include <QTimer>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
@@ -69,6 +71,25 @@ class PlayerTests : public QObject {
 private:
     QTemporaryDir temp;
     QString clip;
+    bool selectSubtitle(PlayerWindow &window, const QVariant &choice) {
+        window.activateWindow();
+        if (!QTest::qWaitForWindowActive(&window)) return false;
+        bool found = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *menu = window.findChild<QMenu *>("subtitleMenu");
+            if (!menu) return;
+            for (auto *action : menu->actions()) {
+                if (!action->isCheckable() || action->data() != choice) continue;
+                found = true;
+                menu->setActiveAction(action);
+                QTest::keyClick(menu, Qt::Key_Return);
+                return;
+            }
+            menu->close();
+        });
+        QTest::keyClick(&window, Qt::Key_L);
+        return found;
+    }
 private slots:
     void initTestCase() {
         QVERIFY(temp.isValid());
@@ -178,6 +199,125 @@ private slots:
         }
         player->play();
         QTRY_VERIFY(player->position() > position + 300);
+    }
+    void subtitleParsing() {
+        const QString path = temp.filePath("parser.srt");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("\xEF\xBB\xBF"
+            "1\r\n00:00:01,000 --> 00:00:03,000\r\n<i>First</i> &amp; second\r\n<<literal>>\r\n\r\n"
+            "2\n00:00:02.000 --> 00:00:04.000\nOverlap\n\n"
+            "3\n00:00:05,000 --> 00:00:04,000\nInvalid duration\n");
+        file.close();
+        SubtitleTrack track;
+        QString error;
+        QVERIFY2(track.load(path, error), qPrintable(error));
+        QCOMPARE(track.textAt(999), QString());
+        QCOMPARE(track.textAt(1000), QString("First & second\n<<literal>>"));
+        QCOMPARE(track.textAt(2000), QString("First & second\n<<literal>>\nOverlap"));
+        QCOMPARE(track.textAt(3000), QString("Overlap"));
+        QCOMPARE(track.textAt(4000), QString());
+        QCOMPARE(track.textAt(1500), QString("First & second\n<<literal>>"));
+        QVERIFY(!track.load(temp.filePath("missing.srt"), error));
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(track.textAt(3000), QString("Overlap"));
+        track.clear();
+        QVERIFY(track.textAt(1500).isEmpty());
+    }
+    void subtitleSelection() {
+        const QString directory = temp.filePath("subtitles");
+        QVERIFY(QDir().mkpath(directory));
+        const QString path = directory + "/external.SRT";
+        QFile srt(path);
+        QVERIFY(srt.open(QIODevice::WriteOnly));
+        srt.write("1\n00:00:01,000 --> 00:00:02,000\nFirst external\n\n"
+            "2\n00:00:02,000 --> 00:00:03,000\nSecond external\n");
+        srt.close();
+        const QString videoPath = directory + "/subtitled.mkv";
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", {"-hide_banner", "-loglevel", "error", "-i", clip, "-i", path,
+            "-map", "0:v", "-map", "0:a", "-map", "1:0", "-c", "copy", "-c:s", "srt",
+            "-metadata:s:s:0", "language=eng", "-metadata:s:s:0", "title=Embedded", "-y", videoPath});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        PlayerWindow window;
+        window.show();
+        QVERIFY(selectSubtitle(window, -1));
+        window.openFile(videoPath);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *sink = window.findChild<QVideoWidget *>()->videoSink();
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && sink->videoFrame().isValid(), 10000);
+        QTRY_COMPARE(player->subtitleTracks().size(), 1);
+        player->pause();
+        player->setPosition(1500);
+        QTRY_VERIFY(qAbs(sink->videoFrame().startTime() / 1000 - 1500) < 100);
+        QVERIFY(selectSubtitle(window, path));
+        QCOMPARE(player->activeSubtitleTrack(), -1);
+        QCOMPARE(sink->subtitleText(), QString("First external"));
+        QCOMPARE(sink->videoFrame().subtitleText(), QString("First external"));
+        auto *gamma = window.findChild<QSlider *>("gamma");
+        gamma->setValue(20);
+        QCOMPARE(sink->subtitleText(), QString("First external"));
+        gamma->setValue(10);
+        QCOMPARE(sink->subtitleText(), QString("First external"));
+        player->setPosition(2200);
+        QTRY_COMPARE(sink->videoFrame().subtitleText(), QString("Second external"));
+        player->setPosition(3500);
+        QTRY_VERIFY(sink->videoFrame().subtitleText().isEmpty());
+        player->setPosition(1500);
+        QTRY_COMPARE(sink->videoFrame().subtitleText(), QString("First external"));
+        window.showFullScreen();
+        QVERIFY(selectSubtitle(window, -1));
+        QTRY_VERIFY(sink->videoFrame().subtitleText().isEmpty());
+        QVERIFY(selectSubtitle(window, 0));
+        QCOMPARE(player->activeSubtitleTrack(), 0);
+        player->setPosition(500);
+        player->play();
+        QTRY_COMPARE_WITH_TIMEOUT(sink->videoFrame().subtitleText(), QString("First external"), 10000);
+        player->pause();
+        QVERIFY(selectSubtitle(window, path));
+        QCOMPARE(player->activeSubtitleTrack(), -1);
+        player->play();
+        QTRY_COMPARE_WITH_TIMEOUT(sink->subtitleText(), QString("Second external"), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(sink->subtitleText().isEmpty(), 5000);
+        window.openFile(clip);
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && sink->videoFrame().isValid(), 10000);
+        QTRY_VERIFY(sink->subtitleText().isEmpty());
+    }
+    void subtitleExample() {
+        const QString directory = qEnvironmentVariable("VIDEO_PLAYER_SUBTITLE_EXAMPLE");
+        if (directory.isEmpty()) QSKIP("Optional local subtitle example");
+        const QDir folder(directory);
+        const QStringList movies = folder.entryList({"*.mkv"}, QDir::Files);
+        const QStringList files = folder.entryList({"*.srt"}, QDir::Files);
+        QVERIFY(!movies.isEmpty());
+        QCOMPARE(files.size(), 2);
+        PlayerWindow window;
+        window.show();
+        window.openFile(folder.filePath(movies.first()));
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *sink = window.findChild<QVideoWidget *>()->videoSink();
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && sink->videoFrame().isValid(), 20000);
+        player->pause();
+        player->setPosition(57000);
+        QTRY_VERIFY_WITH_TIMEOUT(qAbs(sink->videoFrame().startTime() / 1000 - 57000) < 1000, 10000);
+        for (const auto &file : files) {
+            QVERIFY(selectSubtitle(window, folder.filePath(file)));
+            QVERIFY(!sink->subtitleText().isEmpty());
+            if (file.contains("Eng")) QVERIFY(sink->subtitleText().contains("What are you doing here?"));
+            else QVERIFY(sink->subtitleText().contains(QString::fromUtf8("Скарлетт")));
+        }
+        QVERIFY(selectSubtitle(window, folder.filePath(files.first())));
+        const QString capture = qEnvironmentVariable("VIDEO_PLAYER_SUBTITLE_CAPTURE");
+        if (!capture.isEmpty()) {
+            QVideoFrame frame = sink->videoFrame();
+            QImage rendered(frame.size(), QImage::Format_ARGB32);
+            rendered.fill(Qt::black);
+            QPainter painter(&rendered);
+            frame.paint(&painter, QRectF(QPointF(), rendered.size()), {});
+            painter.end();
+            QVERIFY(rendered.save(capture));
+        }
     }
     void nativeStartupBackground() {
 #ifdef Q_OS_WIN

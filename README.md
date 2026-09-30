@@ -62,11 +62,14 @@ The gamma slider adjusts video midtones from 0.1 to 4.0: values above 1.0 lighte
 
 Playback position is saved per file when you close the app (including Escape) or open another video. Reopening that file resumes from the saved position. Finished videos restart from the beginning. Positions are stored in the current user's Qt settings.
 
+Press L to choose an embedded subtitle track or any `.srt` file beside the current video, or choose Off. External subtitles support UTF-8 and BOM-marked UTF-16, multiline cues, and overlapping cues. They follow playback and seeking and can be changed while paused. Opening another video clears the external subtitle selection.
+
 | Control | Action |
 | --- | --- |
 | Right-click → Open video / Ctrl+O | Choose a local file |
 | Space | Play or pause |
 | A | Show audio tracks and select the track to play |
+| L | Choose embedded subtitles or an `.srt` file in the video's folder; select Off to hide subtitles |
 | Left-click video | After release, play or pause once the system double-click interval expires, only if no drag occurred |
 | Double-click video | Toggle fullscreen without briefly pausing or resuming playback |
 | Click and drag video or empty background | Move the window in normal windowed mode without changing playback |
