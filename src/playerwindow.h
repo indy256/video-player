@@ -66,6 +66,7 @@ private:
     QWidget *controlsPanel;
     QAbstractButton *fullscreenClose;
     QTimer *controlsTimer;
+    QMenu *commandsMenu;
     QByteArray windowedGeometry;
     int wheelRemainder = 0;
     bool mousePressed = false;

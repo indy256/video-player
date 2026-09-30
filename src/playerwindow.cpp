@@ -51,6 +51,11 @@ constexpr auto popupMenuStyle = R"(
     QMenu::item:disabled { color: #596173; }
 )";
 
+void setCommandLabel(QAction *action, const QString &label) {
+    const QString shortcuts = action->data().toString();
+    action->setText(shortcuts.isEmpty() ? label : label + '\t' + shortcuts);
+}
+
 class TrackMenu final : public QMenu {
 public:
     TrackMenu(QMediaPlayer *player, QWidget *parent, const QString &name, const QString &title,
@@ -411,24 +416,66 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(player, &QMediaPlayer::durationChanged, this, &PlayerWindow::restorePosition);
     connect(player, &QMediaPlayer::hasVideoChanged, this, &PlayerWindow::updateFullscreen);
     connect(player, &QMediaPlayer::errorOccurred, this, &PlayerWindow::updateControls);
-    auto shortcut = [this](const QKeySequence &key, auto callback) {
-        auto *action = new QShortcut(key, this); connect(action, &QShortcut::activated, this, callback);
+    commandsMenu = new QMenu(this);
+    commandsMenu->setObjectName("playerMenu");
+    auto command = [this](const QString &name, const QString &label,
+                          const QList<QKeySequence> &keys, auto callback) {
+        auto *action = commandsMenu->addAction(label, this, callback);
+        action->setObjectName(name);
+        QStringList shortcuts;
+        for (const auto &key : keys) {
+            shortcuts.append(key.toString(QKeySequence::NativeText));
+            auto *shortcut = new QShortcut(key, this);
+            connect(shortcut, &QShortcut::activated, this, callback);
+        }
+        // Display the keys without registering a second shortcut on the menu action.
+        action->setData(shortcuts.join(" / "));
+        setCommandLabel(action, label);
+        return action;
     };
-    shortcut(QKeySequence::Open, &PlayerWindow::chooseFile);
-    shortcut(QKeySequence(Qt::Key_A), [this] { chooseAudioTrack(true); });
-    shortcut(QKeySequence(Qt::Key_S), [this] { chooseSubtitles(true); });
-    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_A), [this] { chooseAudioTrack(); });
-    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_S), [this] { chooseSubtitles(); });
-    shortcut(QKeySequence(Qt::Key_Space), &PlayerWindow::togglePlayback);
-    shortcut(QKeySequence(Qt::Key_Left), [this] { skip(-3000); });
-    shortcut(QKeySequence(Qt::Key_Right), [this] { skip(3000); });
-    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_Left), [this] { skip(-30000); });
-    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_Right), [this] { skip(30000); });
-    shortcut(QKeySequence(Qt::Key_Up), [this] { adjustVolume(1); });
-    shortcut(QKeySequence(Qt::Key_Down), [this] { adjustVolume(-1); });
-    shortcut(QKeySequence(Qt::Key_F11), &PlayerWindow::toggleFullscreen);
-    shortcut(QKeySequence(Qt::Key_F), &PlayerWindow::toggleFullscreen);
-    shortcut(QKeySequence(Qt::Key_Escape), &PlayerWindow::close);
+    command("openVideo", "Open video", {QKeySequence::Open}, &PlayerWindow::chooseFile);
+    auto *play = command("playPause", "Play", {QKeySequence(Qt::Key_Space)}, &PlayerWindow::togglePlayback);
+    auto *fullscreen = command("fullscreen", "Fullscreen",
+        {QKeySequence(Qt::Key_F), QKeySequence(Qt::Key_F11)}, &PlayerWindow::toggleFullscreen);
+    commandsMenu->addSeparator();
+    const QList<QAction *> seeking{
+        command("back3", "Back 3 seconds", {QKeySequence(Qt::Key_Left)}, [this] { skip(-3000); }),
+        command("forward3", "Forward 3 seconds", {QKeySequence(Qt::Key_Right)}, [this] { skip(3000); }),
+        command("back30", "Back 30 seconds", {QKeySequence(Qt::SHIFT | Qt::Key_Left)}, [this] { skip(-30000); }),
+        command("forward30", "Forward 30 seconds", {QKeySequence(Qt::SHIFT | Qt::Key_Right)}, [this] { skip(30000); })
+    };
+    commandsMenu->addSeparator();
+    const QList<QAction *> tracks{
+        command("nextAudio", "Next enabled audio track", {QKeySequence(Qt::Key_A)}, [this] { chooseAudioTrack(true); }),
+        command("audioTracks", "Audio tracks...", {QKeySequence(Qt::SHIFT | Qt::Key_A)}, [this] { chooseAudioTrack(); }),
+        command("nextSubtitles", "Next enabled subtitle track", {QKeySequence(Qt::Key_S)}, [this] { chooseSubtitles(true); }),
+        command("subtitles", "Subtitles...", {QKeySequence(Qt::SHIFT | Qt::Key_S)}, [this] { chooseSubtitles(); })
+    };
+    commandsMenu->addSeparator();
+    command("volumeUp", "Volume up 5%", {QKeySequence(Qt::Key_Up)}, [this] { adjustVolume(1); });
+    command("volumeDown", "Volume down 5%", {QKeySequence(Qt::Key_Down)}, [this] { adjustVolume(-1); });
+    command("resetGamma", "Reset gamma to 1.0", {}, [this] { gamma->setValue(10); });
+    commandsMenu->addSeparator();
+    auto *update = command("update", "Update to latest version", {}, [this] {
+        if (updating) return;
+        updating = true;
+        const bool installed = AppUpdate::installLatest(this, player->source().toLocalFile());
+        updating = false;
+        if (installed) {
+            savePosition();
+            QApplication::quit();
+        }
+    });
+    commandsMenu->addSeparator();
+    command("exit", "Exit", {QKeySequence(Qt::Key_Escape)}, &PlayerWindow::close);
+    connect(commandsMenu, &QMenu::aboutToShow, this, [this, play, fullscreen, seeking, tracks, update] {
+        setCommandLabel(play, player->isPlaying() ? "Pause" : "Play");
+        setCommandLabel(fullscreen, isFullScreen() ? "Leave fullscreen" : "Fullscreen");
+        play->setEnabled(playbackReady());
+        for (auto *action : seeking) action->setEnabled(timeline->isEnabled());
+        for (auto *action : tracks) action->setEnabled(playbackReady());
+        update->setEnabled(!updating);
+    });
     updateControls();
     updateTimeline();
 #ifdef Q_OS_WIN
@@ -474,26 +521,7 @@ QAction *PlayerWindow::execPopupMenu(QMenu &menu, const QPoint &position) {
 }
 
 void PlayerWindow::showPopupMenu(const QPoint &position) {
-    QMenu menu(this);
-    menu.addAction("Open video", this, &PlayerWindow::chooseFile);
-    auto *play = menu.addAction(player->isPlaying() ? "Pause" : "Play", this, &PlayerWindow::togglePlayback);
-    play->setEnabled(playbackReady());
-    menu.addAction(isFullScreen() ? "Leave fullscreen" : "Fullscreen", this, &PlayerWindow::toggleFullscreen);
-    menu.addSeparator();
-    auto *update = menu.addAction("Update to latest version", this, [this] {
-        if (updating) return;
-        updating = true;
-        const bool installed = AppUpdate::installLatest(this, player->source().toLocalFile());
-        updating = false;
-        if (installed) {
-            savePosition();
-            QApplication::quit();
-        }
-    });
-    update->setEnabled(!updating);
-    menu.addSeparator();
-    menu.addAction("Exit", this, &PlayerWindow::close);
-    execPopupMenu(menu, position);
+    execPopupMenu(*commandsMenu, position);
 }
 
 void PlayerWindow::chooseAudioTrack(bool cycle) {

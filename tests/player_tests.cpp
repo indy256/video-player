@@ -26,6 +26,7 @@
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QMenu>
+#include <QKeySequence>
 #include <QMediaMetaData>
 #include <QDir>
 #include <QPainter>
@@ -96,6 +97,23 @@ class PlayerTests : public QObject {
 private:
     QTemporaryDir temp;
     QString clip;
+    template <typename Callback>
+    bool withPopupMenu(QWidget &surface, Callback callback) {
+        bool opened = false;
+        QTimer timer;
+        timer.setSingleShot(true);
+        connect(&timer, &QTimer::timeout, &surface, [&] {
+            auto *menu = surface.window()->findChild<QMenu *>("playerMenu");
+            if (!menu || !menu->isVisible()) return;
+            opened = true;
+            callback(*menu);
+            menu->close();
+        });
+        timer.start(0);
+        QContextMenuEvent event(QContextMenuEvent::Mouse, QPoint(10, 10), surface.mapToGlobal(QPoint(10, 10)));
+        QApplication::sendEvent(&surface, &event);
+        return opened;
+    }
     template <typename Callback>
     bool withTrackMenu(PlayerWindow &window, Qt::Key key, Callback callback) {
         window.activateWindow();
@@ -194,19 +212,90 @@ private slots:
         for (QWidget *surface : {static_cast<QWidget *>(&window),
                 window.findChild<QWidget *>("emptyStage"),
                 static_cast<QWidget *>(window.findChild<QVideoWidget *>())}) {
-            bool found = false;
-            QTimer::singleShot(0, &window, [&] {
-                auto *menu = window.findChild<QMenu *>();
-                if (menu) {
-                    for (auto *action : menu->actions())
-                        if (action->text() == "Update to latest version") found = action->isEnabled();
-                    menu->close();
-                }
-            });
-            QContextMenuEvent event(QContextMenuEvent::Mouse, QPoint(10, 10), surface->mapToGlobal(QPoint(10, 10)));
-            QApplication::sendEvent(surface, &event);
-            QVERIFY(found);
+            QVERIFY(withPopupMenu(*surface, [&](QMenu &menu) {
+                QVERIFY(menu.findChild<QAction *>("update")->isEnabled());
+                for (const auto &name : {"playPause", "back3", "forward30", "audioTracks", "subtitles"})
+                    QVERIFY(!menu.findChild<QAction *>(name)->isEnabled());
+                QCOMPARE(menu.findChild<QAction *>("nextAudio")->text().section('\t', 1), QString("A"));
+                QCOMPARE(menu.findChild<QAction *>("audioTracks")->text().section('\t', 1),
+                    QKeySequence(Qt::SHIFT | Qt::Key_A).toString(QKeySequence::NativeText));
+                QCOMPARE(menu.findChild<QAction *>("nextSubtitles")->text().section('\t', 1), QString("S"));
+                QCOMPARE(menu.findChild<QAction *>("subtitles")->text().section('\t', 1),
+                    QKeySequence(Qt::SHIFT | Qt::Key_S).toString(QKeySequence::NativeText));
+                QTest::keyClick(&menu, Qt::Key_Escape);
+            }));
+            QVERIFY(window.isVisible());
         }
+    }
+    void popupCommands() {
+        PlayerWindow window;
+        window.show();
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        QTRY_VERIFY(player->isPlaying() && window.findChild<SeekSlider *>("timeline")->isEnabled());
+        auto activate = [&](const QString &name) {
+            bool clicked = false;
+            return withPopupMenu(window, [&](QMenu &menu) {
+                auto *action = menu.findChild<QAction *>(name);
+                if (!action || !action->isEnabled()) return;
+                clicked = true;
+                QTest::mouseClick(&menu, Qt::LeftButton, Qt::NoModifier, menu.actionGeometry(action).center());
+            }) && clicked;
+        };
+        QVERIFY(withPopupMenu(window, [&](QMenu &menu) {
+            QCOMPARE(menu.findChild<QAction *>("playPause")->text().section('\t', 0, 0), QString("Pause"));
+            const QString capture = qEnvironmentVariable("VIDEO_PLAYER_COMMAND_MENU_CAPTURE");
+            if (!capture.isEmpty()) QVERIFY(menu.grab().save(capture));
+        }));
+        QVERIFY(activate("playPause"));
+        QTRY_COMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QVERIFY(withPopupMenu(window, [&](QMenu &menu) {
+            QCOMPARE(menu.findChild<QAction *>("playPause")->text().section('\t', 0, 0), QString("Play"));
+        }));
+        player->setPosition(1000);
+        QVERIFY(activate("forward3"));
+        QCOMPARE(player->position(), qint64(4000));
+        QVERIFY(activate("back3"));
+        QCOMPARE(player->position(), qint64(1000));
+        QVERIFY(activate("forward30"));
+        QCOMPARE(player->position(), player->duration());
+        QVERIFY(activate("back30"));
+        QCOMPARE(player->position(), qint64(0));
+        auto *volume = window.findChild<QSlider *>("volume");
+        volume->setValue(70);
+        QVERIFY(activate("volumeUp"));
+        QCOMPARE(volume->value(), 75);
+        QVERIFY(activate("volumeDown"));
+        QCOMPARE(volume->value(), 70);
+        auto *gamma = window.findChild<QSlider *>("gamma");
+        gamma->setValue(16);
+        QVERIFY(activate("resetGamma"));
+        QCOMPARE(gamma->value(), 10);
+        QVERIFY(activate("fullscreen"));
+        QVERIFY(window.isFullScreen());
+        QVERIFY(withPopupMenu(window, [&](QMenu &menu) {
+            QVERIFY(menu.findChild<QAction *>("fullscreen")->text().startsWith("Leave fullscreen\t"));
+        }));
+        QVERIFY(activate("fullscreen"));
+        QVERIFY(!window.isFullScreen());
+        for (const auto &name : {"audioTracks", "subtitles"}) {
+            bool trackMenuOpened = false;
+            QVERIFY(withPopupMenu(window, [&](QMenu &menu) {
+                QTimer::singleShot(0, &window, [&] {
+                    for (auto *popup : window.findChildren<QMenu *>()) {
+                        if (popup == &menu || !popup->isVisible()) continue;
+                        trackMenuOpened = true;
+                        QTest::keyClick(popup, Qt::Key_Escape);
+                    }
+                });
+                auto *action = menu.findChild<QAction *>(name);
+                QTest::mouseClick(&menu, Qt::LeftButton, Qt::NoModifier, menu.actionGeometry(action).center());
+            }));
+            QVERIFY(trackMenuOpened);
+        }
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QVERIFY(activate("exit"));
+        QVERIFY(!window.isVisible());
     }
     void externalAudioSelection() {
         const QString directory = temp.filePath("external audio");
