@@ -417,10 +417,10 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         auto *action = new QShortcut(key, this); connect(action, &QShortcut::activated, this, callback);
     };
     shortcut(QKeySequence::Open, &PlayerWindow::chooseFile);
-    shortcut(QKeySequence(Qt::Key_A), [this] { chooseAudioTrack(); });
-    shortcut(QKeySequence(Qt::Key_L), [this] { chooseSubtitles(); });
-    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_A), [this] { chooseAudioTrack(true); });
-    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_L), [this] { chooseSubtitles(true); });
+    shortcut(QKeySequence(Qt::Key_A), [this] { chooseAudioTrack(true); });
+    shortcut(QKeySequence(Qt::Key_S), [this] { chooseSubtitles(true); });
+    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_A), [this] { chooseAudioTrack(); });
+    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_S), [this] { chooseSubtitles(); });
     shortcut(QKeySequence(Qt::Key_Space), &PlayerWindow::togglePlayback);
     shortcut(QKeySequence(Qt::Key_Left), [this] { skip(-3000); });
     shortcut(QKeySequence(Qt::Key_Right), [this] { skip(3000); });

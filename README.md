@@ -56,7 +56,7 @@ Paused-only follow-up: set `VIDEO_PLAYER_RESIZE_PAUSED_ONLY=1` alongside the dia
 
 ## Controls
 
-Press `a` to select embedded audio or an audio file in the video's directory whose name starts with the video's name without its extension. For example, `movie.ENG.ac3` accompanies `movie.avi`. Matching is case-insensitive; supported extensions include AC3, EAC3, DTS, AAC, M4A, MKA, MP3, FLAC, WAV, OGG, and Opus (decoding depends on FFmpeg support). External audio follows playback, seeking, and volume. Selecting an embedded track switches back; opening another video clears the external selection. Audio files are assumed to start at the same time as the video.
+Press `A` (Shift+A) to select embedded audio or an audio file in the video's directory whose name starts with the video's name without its extension. For example, `movie.ENG.ac3` accompanies `movie.avi`. Matching is case-insensitive; supported extensions include AC3, EAC3, DTS, AAC, M4A, MKA, MP3, FLAC, WAV, OGG, and Opus (decoding depends on FFmpeg support). External audio follows playback, seeking, and volume. Selecting an embedded track switches back; opening another video clears the external selection. Audio files are assumed to start at the same time as the video.
 
 Volume and gamma are saved separately for each video's canonical file path whenever they change, including zero volume and neutral gamma. Reopening a video restores both settings, including after restarting the app. New videos use the last chosen volume (initially 70%) and gamma 1.0.
 
@@ -64,17 +64,17 @@ The gamma slider adjusts video midtones from 0.1 to 4.0: values above 1.0 lighte
 
 Playback position is saved per file when you close the app (including Escape) or open another video. Reopening that file resumes from the saved position. Finished videos restart from the beginning. Positions are stored in the current user's Qt settings.
 
-Press `l` to choose an embedded subtitle track or any `.srt` file beside the current video, or choose Off. External subtitles support UTF-8 and BOM-marked UTF-16, multiline cues, and overlapping cues. They follow playback and seeking and can be changed while paused. Opening another video clears the external subtitle selection.
+Press `S` (Shift+S) to choose an embedded subtitle track or any `.srt` file beside the current video, or choose Off. External subtitles support UTF-8 and BOM-marked UTF-16, multiline cues, and overlapping cues. They follow playback and seeking and can be changed while paused. Opening another video clears the external subtitle selection.
 
-In either track popup, click a checkbox (or press Space on the highlighted item) to include or skip that item when cycling. Click its name or press Enter to select it; the current track is bold. Uppercase `A` (Shift+A) and `L` (Shift+L) cycle through checked audio and subtitle items in menu order, wrapping at the end. Every item, including subtitles Off, starts checked when a video is opened. Checkbox choices are retained until another video is opened. With no items checked, cycling leaves playback unchanged.
+In either track popup, click a checkbox (or press Space on the highlighted item) to include or skip that item when cycling. Click its name or press Enter to select it; the current track is bold. Lowercase `a` and `s` cycle through checked audio and subtitle items in menu order, wrapping at the end. Every item, including subtitles Off, starts checked when a video is opened. Checkbox choices are retained until another video is opened. With no items checked, cycling leaves playback unchanged.
 
 | Control | Action |
 | --- | --- |
 | Right-click → Open video / Ctrl+O | Choose a local file |
 | Space | Play or pause |
-| a | Choose an embedded audio track or a matching audio file beside the video |
-| l | Choose embedded subtitles or an `.srt` file in the video's folder; select Off to hide subtitles |
-| A (Shift+A) / L (Shift+L) | Cycle through checked audio / subtitle items |
+| A (Shift+A) | Choose an embedded audio track or a matching audio file beside the video |
+| S (Shift+S) | Choose embedded subtitles or an `.srt` file in the video's folder; select Off to hide subtitles |
+| a / s | Cycle through checked audio / subtitle items |
 | Left-click video | After release, play or pause once the system double-click interval expires, only if no drag occurred |
 | Double-click video | Toggle fullscreen without briefly pausing or resuming playback |
 | Click and drag video or empty background | Move the window in normal windowed mode without changing playback |
