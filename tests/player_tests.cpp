@@ -283,6 +283,16 @@ private slots:
         QCOMPARE(files->item(0)->text(), QString("a first.mp4"));
         QCOMPARE(files->item(1)->text(), QString("b second.MP4"));
         QCOMPARE(files->currentRow(), 0);
+        auto *volume = window.findChild<QSlider *>("volume");
+        volume->setValue(50);
+        for (QWidget *surface : {files->viewport(), static_cast<QWidget *>(panel)}) {
+            for (int delta : {-120, 120}) {
+                QWheelEvent wheel(QPointF(10, 10), surface->mapToGlobal(QPoint(10, 10)), {},
+                    QPoint(0, delta), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                QApplication::sendEvent(surface, &wheel);
+                QCOMPARE(volume->value(), 50);
+            }
+        }
         const auto firstIcon = files->item(0)->icon().cacheKey();
         const auto secondIcon = files->item(1)->icon().cacheKey();
         QTRY_VERIFY(panel->mapToGlobal(QPoint()).x() >= video->mapToGlobal(QPoint(video->width(), 0)).x());

@@ -12,6 +12,7 @@
 #include <QVBoxLayout>
 #include <QVideoFrame>
 #include <QVideoSink>
+#include <QWheelEvent>
 
 namespace {
 constexpr int thumbnailReady = Qt::UserRole + 1;
@@ -183,4 +184,9 @@ void FolderPanel::hideEvent(QHideEvent *event) {
 void FolderPanel::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
     thumbnailTimer->start();
+}
+
+void FolderPanel::wheelEvent(QWheelEvent *event) {
+    // Consume wheel events the list cannot scroll, including at its boundaries.
+    event->accept();
 }
