@@ -884,12 +884,8 @@ void PlayerWindow::updateFullscreenControls() {
     const int panelHeight = controlsPanel->sizeHint().height();
     const QPoint panelPosition = centralWidget()->mapToGlobal(QPoint(0, centralWidget()->height() - panelHeight));
     controlsPanel->setGeometry(QRect(panelPosition, QSize(centralWidget()->width(), panelHeight)));
-    const QPoint cursor = centralWidget()->mapFromGlobal(globalCursor);
-    const bool inside = centralWidget()->rect().contains(cursor);
-    const bool atBottom = inside && cursor.y() >= centralWidget()->height() - 6;
-    const bool overControls = inside && controlsPanel->isVisible()
-        && controlsPanel->geometry().contains(globalCursor);
-    controlsPanel->setVisible(atBottom || overControls || timeline->isSliderDown()
+    const bool overControls = controlsPanel->geometry().contains(globalCursor);
+    controlsPanel->setVisible(overControls || timeline->isSliderDown()
         || volume->isSliderDown() || gamma->isSliderDown());
     if (controlsPanel->isVisible()) controlsPanel->raise();
 }

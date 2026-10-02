@@ -812,16 +812,19 @@ private slots:
         QCOMPARE(reader->activeAudioTrack(), -1);
         QCOMPARE(reader->activeVideoTrack(), -1);
         QTRY_VERIFY(player->position() >= 1600);
-        // Clock drift can legitimately trigger a corrective seek (LoadedMedia),
-        // especially on CI runners. Check playback and caption continuity instead.
         QVERIFY(reader->isPlaying());
-        QCOMPARE(sink->subtitleText(), QString("First external"));
-        QCOMPARE(sink->videoFrame().subtitleText(), QString("First external"));
-        gamma->setValue(16);
-        QCOMPARE(sink->subtitleText(), QString("First external"));
-        gamma->setValue(10);
+        // Gamma can rebuild the video sink. Freeze the timeline so a caption
+        // transition during that work cannot race the preservation checks.
         player->pause();
         QTRY_COMPARE(reader->playbackState(), QMediaPlayer::PausedState);
+        player->setPosition(1500);
+        QTRY_COMPARE(sink->subtitleText(), QString("First external"));
+        QTRY_COMPARE(sink->videoFrame().subtitleText(), QString("First external"));
+        gamma->setValue(16);
+        QCOMPARE(sink->subtitleText(), QString("First external"));
+        QCOMPARE(sink->videoFrame().subtitleText(), QString("First external"));
+        gamma->setValue(10);
+        QCOMPARE(sink->subtitleText(), QString("First external"));
         player->setPosition(2200);
         QCOMPARE(reader->position(), player->position());
         player->setPlaybackRate(1.5);
@@ -1294,7 +1297,12 @@ private slots:
         QCursor::setPos(window.mapToGlobal(window.rect().center()));
         QTRY_VERIFY(!panel->isVisible());
         const QRect videoGeometry(video->mapToGlobal(QPoint()), video->size());
-        QCursor::setPos(window.mapToGlobal(QPoint(window.width() / 2, window.height() - 1)));
+        const QPoint panelTop = window.centralWidget()->mapToGlobal(QPoint(
+            window.centralWidget()->width() / 2, window.centralWidget()->height() - panel->sizeHint().height()));
+        QCursor::setPos(panelTop - QPoint(0, 1));
+        QTest::qWait(150);
+        QVERIFY(!panel->isVisible());
+        QCursor::setPos(panelTop);
         QTRY_VERIFY(panel->isVisible());
         QCursor::setPos(volume->mapToGlobal(volume->rect().center()));
         QTest::qWait(150);
