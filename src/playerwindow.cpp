@@ -436,7 +436,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     command("openVideo", "Open video", {QKeySequence::Open}, &PlayerWindow::chooseFile);
     auto *play = command("playPause", "Play", {QKeySequence(Qt::Key_Space)}, &PlayerWindow::togglePlayback);
     auto *fullscreen = command("fullscreen", "Fullscreen",
-        {QKeySequence(Qt::Key_F), QKeySequence(Qt::Key_F11)}, &PlayerWindow::toggleFullscreen);
+        {QKeySequence(Qt::Key_Return), QKeySequence(Qt::Key_Enter),
+         QKeySequence(Qt::Key_F), QKeySequence(Qt::Key_F11)}, &PlayerWindow::toggleFullscreen);
     commandsMenu->addSeparator();
     const QList<QAction *> seeking{
         command("back3", "Back 3 seconds", {QKeySequence(Qt::Key_Left)}, [this] { skip(-3000); }),

@@ -86,7 +86,7 @@ In either track popup, click a checkbox (or press Space on the highlighted item)
 | Volume slider | Adjust audio; set to zero to silence |
 | Gamma slider | Adjust midtones; double-click to reset to 1.0 |
 | Mouse wheel / Up / Down | Increase or decrease volume in 5% steps, including fullscreen |
-| F / F11 | Toggle fullscreen (move the mouse to the bottom edge to reveal the sliders) |
+| Enter / F / F11 | Toggle fullscreen (move the mouse to the bottom edge to reveal the sliders) |
 | Escape | Close the app |
 | Fullscreen top-right corner | Reveal the close cross; click to exit (hides when the pointer leaves) |
 
