@@ -91,7 +91,7 @@ In either track popup, click a checkbox (or press Space on the highlighted item)
 | Gamma slider | Adjust midtones; double-click to reset to 1.0 |
 | Mouse wheel / Up / Down | Increase or decrease volume in 5% steps, including fullscreen |
 | Enter / F / F11 | Toggle fullscreen (move the mouse to the bottom edge to reveal the sliders) |
-| L | Show/hide videos in the current folder to the right of the video; click a thumbnail or filename to play it |
+| L / Folder button beside Gamma | Show/hide videos in the current folder to the right of the video; click a thumbnail or filename to play it |
 | Escape | Close the app |
 | Fullscreen top-right corner | Reveal the close cross; click to exit (hides when the pointer leaves) |
 

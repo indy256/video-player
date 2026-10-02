@@ -396,6 +396,14 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     gammaLabel->setObjectName("gammaReadout");
     gamma->setToolTip("Gamma 1.0 (double-click to reset)");
     controls->addWidget(gammaLabel, 1, 2);
+    auto *filesButton = new QPushButton("Folder");
+    filesButton->setObjectName("folderFilesButton");
+    filesButton->setCheckable(true);
+    filesButton->setFocusPolicy(Qt::NoFocus);
+    filesButton->setToolTip("Show/hide folder files (L)");
+    filesButton->setAccessibleName("Show/hide folder files");
+    controls->addWidget(filesButton, 0, 3, 2, 1, Qt::AlignVCenter);
+    connect(filesButton, &QPushButton::toggled, folderPanel, &QWidget::setVisible);
     connect(gamma, &QSlider::valueChanged, this, [gammaFilter, gammaLabel, this](int value) {
         const QString text = QString("Gamma %1").arg(value / 10.0, 0, 'f', 1);
         gammaLabel->setText(text);
@@ -418,6 +426,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QWidget#emptyStage QLabel { background: transparent; border: none; }
         QPushButton { background: #242b3b; color: #e4eaf8; border: 1px solid #333e53; border-radius: 7px; padding: 9px 16px; }
         QPushButton:hover { background: #33415b; }
+        QPushButton:checked { background: #33415b; border-color: #759eff; }
         QPushButton:focus { border-color: #94b4ff; }
         QPushButton:disabled { color: #596173; background: #1b202c; border-color: #252c39; }
         QSlider::groove:horizontal { background: #2b3243; height: 5px; border-radius: 2px; }
@@ -466,8 +475,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         return action;
     };
     command("openVideo", "Open video", {QKeySequence::Open}, &PlayerWindow::chooseFile);
-    command("folderFiles", "Show/hide folder files", {QKeySequence(Qt::Key_L)}, [this] {
-        folderPanel->setVisible(folderPanel->isHidden());
+    command("folderFiles", "Show/hide folder files", {QKeySequence(Qt::Key_L)}, [filesButton] {
+        filesButton->click();
     });
     auto *play = command("playPause", "Play", {QKeySequence(Qt::Key_Space)}, &PlayerWindow::togglePlayback);
     auto *fullscreen = command("fullscreen", "Fullscreen",
