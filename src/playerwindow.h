@@ -21,6 +21,7 @@ class PlayerWindow : public QMainWindow {
 public:
     explicit PlayerWindow(QWidget *parent = nullptr);
     void openFile(const QString &path);
+    void openAndActivate(const QString &path);
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
 #ifdef Q_OS_WIN

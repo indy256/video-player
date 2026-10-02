@@ -52,13 +52,7 @@ int main(int argc, char *argv[]) {
     palette.setColor(QPalette::Base, Qt::black);
     app.setPalette(palette);
     PlayerWindow window;
-    QObject::connect(&instance, &SingleInstance::openRequested, &window, [&window](const QString &path) {
-        if (!path.isEmpty()) window.openFile(path);
-        if (window.isMinimized()) window.setWindowState(window.windowState() & ~Qt::WindowMinimized);
-        window.show();
-        window.raise();
-        window.activateWindow();
-    });
+    QObject::connect(&instance, &SingleInstance::openRequested, &window, &PlayerWindow::openAndActivate);
     if (!file.isEmpty()) window.openFile(file);
     window.show();
     return app.exec();

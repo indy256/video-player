@@ -6,4 +6,4 @@ Exec=VideoPlayer %f
 Icon=video-player
 Terminal=false
 Categories=AudioVideo;Video;Player;
-MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;
+MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/quicktime;video/webm;video/x-m4v;video/x-ms-wmv;video/mpeg;video/mp2t;video/ogg;

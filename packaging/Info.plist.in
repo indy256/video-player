@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.github.indy256.video-player</string>
+    <key>CFBundleName</key>
+    <string>VideoPlayer</string>
+    <key>CFBundleDisplayName</key>
+    <string>Video Player</string>
+    <key>CFBundleIconFile</key>
+    <string>${MACOSX_BUNDLE_ICON_FILE}</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${VIDEO_PLAYER_VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${VIDEO_PLAYER_VERSION}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Video</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>mp4</string>
+                <string>mkv</string>
+                <string>avi</string>
+                <string>mov</string>
+                <string>webm</string>
+                <string>m4v</string>
+                <string>wmv</string>
+                <string>mpeg</string>
+                <string>mpg</string>
+                <string>ts</string>
+                <string>m2ts</string>
+                <string>ogv</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

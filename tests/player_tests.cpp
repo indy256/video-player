@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QAbstractButton>
 #include <QFile>
+#include <QFileOpenEvent>
 #include <QLabel>
 #include <QProcess>
 #include <QSignalSpy>
@@ -214,6 +215,7 @@ private slots:
                 static_cast<QWidget *>(window.findChild<QVideoWidget *>())}) {
             QVERIFY(withPopupMenu(*surface, [&](QMenu &menu) {
                 QVERIFY(menu.findChild<QAction *>("update")->isEnabled());
+                QVERIFY(menu.findChild<QAction *>("registerFileTypes")->isEnabled());
                 for (const auto &name : {"playPause", "back3", "forward30", "audioTracks", "subtitles"})
                     QVERIFY(!menu.findChild<QAction *>(name)->isEnabled());
                 QCOMPARE(menu.findChild<QAction *>("nextAudio")->text().section('\t', 1), QString("A"));
@@ -226,6 +228,28 @@ private slots:
             }));
             QVERIFY(window.isVisible());
         }
+    }
+    void nativeFileOpen() {
+        PlayerWindow window;
+        window.showMinimized();
+        QFileOpenEvent event(QUrl::fromLocalFile(clip));
+        QVERIFY(QApplication::sendEvent(qApp, &event));
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        QCOMPARE(player->source(), QUrl::fromLocalFile(clip));
+        QVERIFY(window.isVisible());
+        QVERIFY(!window.isMinimized());
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+        QSignalSpy sources(player, &QMediaPlayer::sourceChanged);
+        QFileOpenEvent remote(QUrl("https://example.com/video.mp4"));
+        QApplication::sendEvent(qApp, &remote);
+        QObject unrelated;
+        QFileOpenEvent other(temp.filePath("other.mp4"));
+        QApplication::sendEvent(&unrelated, &other);
+        window.openAndActivate({});
+        QVERIFY(sources.isEmpty());
+        QFileOpenEvent local(clip);
+        QVERIFY(QApplication::sendEvent(qApp, &local));
+        QCOMPARE(player->source(), QUrl::fromLocalFile(clip));
     }
     void popupCommands() {
         PlayerWindow window;

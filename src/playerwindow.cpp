@@ -4,6 +4,8 @@
 #include "gammafilter.h"
 #include "externalaudio.h"
 #include "embeddedsubtitles.h"
+#include "fileassociations.h"
+#include <QFileOpenEvent>
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QMenu>
@@ -43,6 +45,24 @@
 #endif
 
 namespace {
+// Finder and Dock opens share the same activation path as single-instance requests.
+class FileOpenEvents : public QObject {
+public:
+    explicit FileOpenEvents(PlayerWindow *window) : QObject(window), window(window) {
+        qApp->installEventFilter(this);
+    }
+private:
+    bool eventFilter(QObject *object, QEvent *event) override {
+        if (object != qApp || event->type() != QEvent::FileOpen) return false;
+        const auto url = static_cast<QFileOpenEvent *>(event)->url();
+        if (!url.isLocalFile()) return false;
+        window->openAndActivate(url.toLocalFile());
+        event->accept();
+        return true;
+    }
+    PlayerWindow *window;
+};
+
 constexpr auto popupMenuStyle = R"(
     QMenu { background: #242b3b; color: #e4eaf8; border: 1px solid #475575;
             padding: 4px; font-family: 'Segoe UI'; font-size: 13px; }
@@ -416,6 +436,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(player, &QMediaPlayer::durationChanged, this, &PlayerWindow::restorePosition);
     connect(player, &QMediaPlayer::hasVideoChanged, this, &PlayerWindow::updateFullscreen);
     connect(player, &QMediaPlayer::errorOccurred, this, &PlayerWindow::updateControls);
+    new FileOpenEvents(this);
     commandsMenu = new QMenu(this);
     commandsMenu->setObjectName("playerMenu");
     auto command = [this](const QString &name, const QString &label,
@@ -457,6 +478,22 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     command("volumeDown", "Volume down 5%", {QKeySequence(Qt::Key_Down)}, [this] { adjustVolume(-1); });
     command("resetGamma", "Reset gamma to 1.0", {}, [this] { gamma->setValue(10); });
     commandsMenu->addSeparator();
+    command("registerFileTypes", "Register file types", {}, [this] {
+        const QString error = FileAssociations::registerFileTypes();
+        if (!error.isEmpty()) {
+            QMessageBox::warning(this, "Register file types", error);
+            return;
+        }
+        QString message = "Video Player is registered for " + FileAssociations::extensions().join(", ").toUpper() + ".\n\n";
+#ifdef Q_OS_WIN
+        message += "Choose Video Player in Open with, or in Settings > Apps > Default apps to make it your default player.";
+#elif defined(Q_OS_MACOS)
+        message += "To make it the default, select a video in Finder, open Get Info, choose VideoPlayer under Open with, and click Change All.";
+#else
+        message += "Choose Video Player in your file manager's Open With menu to make it the default player.";
+#endif
+        QMessageBox::information(this, "Register file types", message);
+    });
     auto *update = command("update", "Update to latest version", {}, [this] {
         if (updating) return;
         updating = true;
@@ -504,9 +541,17 @@ bool PlayerWindow::nativeEvent(const QByteArray &eventType, void *message, qintp
 }
 #endif
 
+void PlayerWindow::openAndActivate(const QString &path) {
+    if (!path.isEmpty()) openFile(path);
+    if (isMinimized()) setWindowState(windowState() & ~Qt::WindowMinimized);
+    show();
+    raise();
+    activateWindow();
+}
+
 void PlayerWindow::chooseFile() {
     const QString path = QFileDialog::getOpenFileName(this, "Open video", {},
-        "Video files (*.mp4 *.mkv *.avi *.mov *.webm *.m4v *.wmv *.mpeg *.mpg *.ts *.m2ts *.ogv);;All files (*)");
+        QString("Video files (*.%1);;All files (*)").arg(FileAssociations::extensions().join(" *.")));
     if (!path.isEmpty()) openFile(path);
 }
 
