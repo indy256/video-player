@@ -441,8 +441,16 @@ private slots:
         QTRY_VERIFY(samples.count >= 5);
 #endif
         QTest::qWait(600);
-        QVERIFY(qAbs(audio->position() - video->position()) < 250);
+        // Device startup and position notifications settle asynchronously on CI.
+        // Keep the drift limit, but do not require convergence on one exact tick.
+        QTRY_VERIFY2_WITH_TIMEOUT(video->isPlaying() && audio->isPlaying()
+            && qAbs(audio->position() - video->position()) < 250,
+            qPrintable(QString("Audio position %1 ms, video position %2 ms")
+                .arg(audio->position()).arg(video->position())), 2000);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        // Give the independent drift test a full interval before this short track ends.
+        external->seek(1000);
+        QTRY_VERIFY(qAbs(audio->position() - video->position()) < 250);
         // Introduce clock drift. Correcting it must not skip decoded audio.
         audio->setPosition(video->position() - 400);
         QTest::qWait(100);

@@ -66,7 +66,8 @@ jobs:
         run: ./scripts/setup-msvc.ps1 -Architecture ${{ matrix.msvc-arch }}
 
       - name: Install Qt and multimedia backend
-        uses: jurplel/install-qt-action@v4
+        # v4.4 uses $/action, which some hosted runners reject when parsing cleanup steps.
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: ${{ matrix.qt-version }}
           host: ${{ matrix.qt-host }}
