@@ -69,11 +69,12 @@ void EmbeddedSubtitles::synchronize() {
     // A subtitle-only reader reports caption timestamps, not a continuous position.
     // Measure drift against elapsed playback time so sparse captions do not cause seeks.
     const qint64 expectedPosition = playbackClock.isValid()
-        ? clockPosition + qRound64(playbackClock.elapsed() * reader->playbackRate()) : reader->position();
+        ? clockPosition + qRound64(playbackClock.elapsed() * reader->playbackRate()) : clockPosition;
     const bool playing = video->isPlaying();
     if (!playing) reader->pause();
     const bool seek = trackChanged || (playing && !reader->isPlaying())
-        || (!playing && reader->position() != position) || qAbs(expectedPosition - position) > 250;
+        || (playing ? qAbs(expectedPosition - position) > 250
+                    : !playbackClock.isValid() && clockPosition != position);
     if (seek) reader->setPosition(position);
     if (seek || reader->playbackRate() != video->playbackRate()) {
         clockPosition = seek ? position : expectedPosition;
@@ -81,5 +82,10 @@ void EmbeddedSubtitles::synchronize() {
     }
     reader->setPlaybackRate(video->playbackRate());
     if (playing) reader->play();
-    else playbackClock.invalidate();
+    else {
+        // Pausing freezes the current caption. Only a subsequent position change
+        // should seek; the reader's sparse caption timestamps are not clock drift.
+        clockPosition = position;
+        playbackClock.invalidate();
+    }
 }
