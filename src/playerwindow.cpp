@@ -5,6 +5,7 @@
 #include "externalaudio.h"
 #include "embeddedsubtitles.h"
 #include "fileassociations.h"
+#include "folderpanel.h"
 #include <QFileOpenEvent>
 #include <QContextMenuEvent>
 #include <QCursor>
@@ -288,6 +289,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     layout->setContentsMargins(0, 0, 0, 12);
     layout->setSpacing(16);
     stage = new QStackedWidget;
+    stage->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto *empty = new QWidget;
     empty->installEventFilter(this);
     empty->setObjectName("emptyStage");
@@ -341,7 +343,16 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     }, Qt::QueuedConnection);
     connect(video->videoSink(), &QVideoSink::subtitleTextChanged,
         this, &PlayerWindow::updateSubtitles, Qt::QueuedConnection);
-    layout->addWidget(stage, 1);
+    auto *screen = new QWidget;
+    auto *screenLayout = new QHBoxLayout(screen);
+    screenLayout->setContentsMargins(0, 0, 0, 0);
+    screenLayout->setSpacing(0);
+    screenLayout->addWidget(stage, 1);
+    folderPanel = new FolderPanel;
+    folderPanel->hide();
+    screenLayout->addWidget(folderPanel);
+    connect(folderPanel, &FolderPanel::fileSelected, this, &PlayerWindow::openFile);
+    layout->addWidget(screen, 1);
     timeline = new SeekSlider;
     timeline->setObjectName("timeline");
     timeline->setAccessibleName("Video position");
@@ -455,6 +466,9 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         return action;
     };
     command("openVideo", "Open video", {QKeySequence::Open}, &PlayerWindow::chooseFile);
+    command("folderFiles", "Show/hide folder files", {QKeySequence(Qt::Key_L)}, [this] {
+        folderPanel->setVisible(folderPanel->isHidden());
+    });
     auto *play = command("playPause", "Play", {QKeySequence(Qt::Key_Space)}, &PlayerWindow::togglePlayback);
     auto *fullscreen = command("fullscreen", "Fullscreen",
         {QKeySequence(Qt::Key_Return), QKeySequence(Qt::Key_Enter),
@@ -650,6 +664,7 @@ void PlayerWindow::openFile(const QString &path) {
     stage->setCurrentIndex(2);
     setWindowTitle(file.fileName() + QStringLiteral(" - Video Player v" VIDEO_PLAYER_VERSION));
     player->setSource(QUrl::fromLocalFile(file.absoluteFilePath()));
+    folderPanel->setFile(file.absoluteFilePath());
     restorePosition();
     player->play();
 }

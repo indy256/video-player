@@ -3,11 +3,13 @@
 #include "gammafilter.h"
 #include "externalaudio.h"
 #include "embeddedsubtitles.h"
+#include "folderpanel.h"
 #include <QApplication>
 #include <QAbstractButton>
 #include <QFile>
 #include <QFileOpenEvent>
 #include <QLabel>
+#include <QListWidget>
 #include <QProcess>
 #include <QSignalSpy>
 #include <QSettings>
@@ -250,6 +252,59 @@ private slots:
         QFileOpenEvent local(clip);
         QVERIFY(QApplication::sendEvent(qApp, &local));
         QCOMPARE(player->source(), QUrl::fromLocalFile(clip));
+    }
+    void folderFiles() {
+        const QString folder = temp.filePath("folder browser");
+        QVERIFY(QDir().mkpath(folder));
+        const QString first = folder + "/a first.mp4";
+        const QString second = folder + "/b second.MP4";
+        QVERIFY(QFile::copy(clip, first));
+        QVERIFY(QFile::copy(clip, second));
+        QFile other(folder + "/notes.txt");
+        QVERIFY(other.open(QIODevice::WriteOnly));
+        other.close();
+        PlayerWindow window;
+        window.resize(900, 600);
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        window.openFile(first);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *panel = window.findChild<FolderPanel *>();
+        auto *files = window.findChild<QListWidget *>("folderFiles");
+        auto *video = window.findChild<QVideoWidget *>();
+        QVERIFY(panel->isHidden());
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && video->isVisible(), 10000);
+        player->pause();
+        QTRY_COMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QTest::keyClick(&window, Qt::Key_L);
+        QVERIFY(panel->isVisible());
+        QCOMPARE(files->count(), 2);
+        QCOMPARE(files->item(0)->text(), QString("a first.mp4"));
+        QCOMPARE(files->item(1)->text(), QString("b second.MP4"));
+        QCOMPARE(files->currentRow(), 0);
+        const auto firstIcon = files->item(0)->icon().cacheKey();
+        const auto secondIcon = files->item(1)->icon().cacheKey();
+        QTRY_VERIFY(panel->mapToGlobal(QPoint()).x() >= video->mapToGlobal(QPoint(video->width(), 0)).x());
+        QTRY_VERIFY_WITH_TIMEOUT(files->item(0)->icon().cacheKey() != firstIcon, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(files->item(1)->icon().cacheKey() != secondIcon, 10000);
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QCOMPARE(player->source(), QUrl::fromLocalFile(first));
+        QTest::mouseClick(files->viewport(), Qt::LeftButton, Qt::NoModifier, files->visualItemRect(files->item(1)).center());
+        QCOMPARE(player->source(), QUrl::fromLocalFile(second));
+        QCOMPARE(files->currentRow(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && video->isVisible(), 10000);
+        QTest::keyClick(&window, Qt::Key_L);
+        QVERIFY(panel->isHidden());
+        window.showFullScreen();
+        QTest::keyClick(&window, Qt::Key_L);
+        QVERIFY(panel->isVisible());
+        QCOMPARE(files->currentRow(), 1);
+        QTRY_VERIFY(panel->mapToGlobal(QPoint()).x() >= video->mapToGlobal(QPoint(video->width(), 0)).x());
+        window.openFile(clip); // Changing folders refreshes the panel.
+        QCOMPARE(files->currentItem()->data(Qt::UserRole).toString(), clip);
+        QTest::keyClick(&window, Qt::Key_L); // Cancel pending thumbnail work.
+        QVERIFY(panel->isHidden());
     }
     void popupCommands() {
         PlayerWindow window;

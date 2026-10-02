@@ -15,6 +15,7 @@ class QContextMenuEvent;
 class QAbstractButton;
 class ExternalAudio;
 class EmbeddedSubtitles;
+class FolderPanel;
 
 class PlayerWindow : public QMainWindow {
     Q_OBJECT
@@ -58,6 +59,7 @@ private:
     EmbeddedSubtitles *embeddedSubtitles;
     QVideoWidget *video;
     QStackedWidget *stage;
+    FolderPanel *folderPanel;
     QLabel *statusLabel;
     QLabel *timeLabel;
     SeekSlider *timeline;
