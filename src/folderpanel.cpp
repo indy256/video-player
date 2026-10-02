@@ -18,7 +18,7 @@ constexpr int thumbnailReady = Qt::UserRole + 1;
 const QSize thumbnailSize(128, 72);
 
 qint64 previewPosition(const QMediaPlayer *player) {
-    return qMin<qint64>(10000, player->duration() / 10);
+    return player->duration() / 2;
 }
 
 QString thumbnailKey(const QFileInfo &file) {
