@@ -13,6 +13,7 @@
 #include <QProcess>
 #include <QSignalSpy>
 #include <QSettings>
+#include <QCryptographicHash>
 #include <QElapsedTimer>
 #include <QTemporaryDir>
 #include <QTest>
@@ -1165,6 +1166,13 @@ private slots:
         const QString second = temp.filePath("settings second.mp4");
         QVERIFY(QFile::copy(clip, first));
         QVERIFY(QFile::copy(clip, second));
+        QString identity = QFileInfo(first).canonicalFilePath();
+#ifdef Q_OS_WIN
+        identity = identity.toCaseFolded();
+#endif
+        const QString legacyVolume = "videos/" + QString::fromLatin1(QCryptographicHash::hash(
+            identity.toUtf8(), QCryptographicHash::Sha256).toHex()) + "/volume";
+        QSettings().setValue(legacyVolume, 12);
         {
             PlayerWindow window;
             auto *volume = window.findChild<QSlider *>("volume");
@@ -1176,14 +1184,14 @@ private slots:
             QCOMPARE(gamma->value(), 10);
             volume->setValue(85);
             window.openFile(first);
-            QCOMPARE(volume->value(), 0);
+            QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 23);
-            QCOMPARE(window.findChild<QAudioOutput *>()->volume(), 0.f);
-            QCOMPARE(window.findChild<QLabel *>("volumeReadout")->text(), QString("Volume 0"));
+            QCOMPARE(window.findChild<QAudioOutput *>()->volume(), 0.85f);
+            QCOMPARE(window.findChild<QLabel *>("volumeReadout")->text(), QString("Volume 85"));
             QCOMPARE(window.findChild<QLabel *>("gammaReadout")->text(), QString("Gamma 2.3"));
             // A missing file must not change the active video's settings.
             window.openFile(temp.filePath("missing settings.mp4"));
-            QCOMPARE(volume->value(), 0);
+            QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 23);
             window.close();
         }
@@ -1194,7 +1202,7 @@ private slots:
             auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
             auto *video = window.findChild<QVideoWidget *>();
             window.openFile(first);
-            QCOMPARE(volume->value(), 0);
+            QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 23);
             QVERIFY(player->videoSink() != video->videoSink());
             window.openFile(second);
@@ -1203,7 +1211,7 @@ private slots:
             QCOMPARE(player->videoSink(), video->videoSink());
             QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
             window.openFile(first);
-            QCOMPARE(volume->value(), 0);
+            QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 23);
             gamma->setValue(10);
             window.close();
@@ -1211,7 +1219,8 @@ private slots:
         PlayerWindow reopened;
         reopened.openFile(first);
         QCOMPARE(reopened.findChild<QSlider *>("gamma")->value(), 10);
-        QCOMPARE(reopened.findChild<QSlider *>("volume")->value(), 0);
+        QCOMPARE(reopened.findChild<QSlider *>("volume")->value(), 85);
+        QCOMPARE(QSettings().value(legacyVolume).toInt(), 12); // Old per-video values are neither read nor updated.
         QCOMPARE(reopened.findChild<QMediaPlayer *>("mediaPlayer")->videoSink(),
             reopened.findChild<QVideoWidget *>()->videoSink());
         QSettings().remove("audio/volume");

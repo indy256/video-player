@@ -37,7 +37,7 @@ protected:
 private:
     void savePosition();
     void restorePosition();
-    void saveVideoSettings(bool rememberVolume = false);
+    void saveVideoSettings();
     bool playbackReady() const;
     void toggleFullscreen();
     void updateFullscreen();

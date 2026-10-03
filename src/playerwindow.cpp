@@ -436,10 +436,10 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QToolTip { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; }
     )");
     connect(emptyOpen, &QPushButton::clicked, this, &PlayerWindow::chooseFile);
-    connect(volume, &QSlider::valueChanged, this, [this, audio, volumeLabel](int value) {
+    connect(volume, &QSlider::valueChanged, this, [audio, volumeLabel](int value) {
         volumeLabel->setText(QString("Volume %1").arg(value));
         audio->setVolume(value / 100.f);
-        saveVideoSettings(true);
+        QSettings().setValue("audio/volume", value);
     });
     connect(timeline, &QSlider::valueChanged, this, &PlayerWindow::seekToSlider);
     connect(timeline, &QSlider::sliderReleased, this, &PlayerWindow::updateTimeline);
@@ -661,11 +661,9 @@ void PlayerWindow::openFile(const QString &path) {
         identity.toUtf8(), QCryptographicHash::Sha256).toHex());
     QSettings settings;
     pendingPosition = settings.value("positions/" + fileKey, 0).toLongLong();
-    const int defaultVolume = settings.value("audio/volume", 70).toInt();
     settings.beginGroup("videos/" + fileKey);
     restoringVideoSettings = true;
     // QSlider clamps restored values to its configured range.
-    volume->setValue(settings.value("volume", defaultVolume).toInt());
     gamma->setValue(settings.value("gamma", 10).toInt());
     restoringVideoSettings = false;
     saveVideoSettings();
@@ -678,13 +676,11 @@ void PlayerWindow::openFile(const QString &path) {
     player->play();
 }
 
-void PlayerWindow::saveVideoSettings(bool rememberVolume) {
+void PlayerWindow::saveVideoSettings() {
     if (restoringVideoSettings) return;
     QSettings settings;
-    if (rememberVolume) settings.setValue("audio/volume", volume->value());
     if (!fileKey.isEmpty()) {
         settings.beginGroup("videos/" + fileKey);
-        settings.setValue("volume", volume->value());
         settings.setValue("gamma", gamma->value());
     }
     settings.sync();

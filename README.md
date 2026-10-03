@@ -64,7 +64,7 @@ Paused-only follow-up: set `VIDEO_PLAYER_RESIZE_PAUSED_ONLY=1` alongside the dia
 
 Press `A` (Shift+A) to select embedded audio or an audio file in the video's directory whose name starts with the video's name without its extension. For example, `movie.ENG.ac3` accompanies `movie.avi`. Matching is case-insensitive; supported extensions include AC3, EAC3, DTS, AAC, M4A, MKA, MP3, FLAC, WAV, OGG, and Opus (decoding depends on FFmpeg support). External audio follows playback, seeking, and volume. Selecting an embedded track switches back; opening another video clears the external selection. Audio files are assumed to start at the same time as the video.
 
-Volume and gamma are saved separately for each video's canonical file path whenever they change, including zero volume and neutral gamma. Reopening a video restores both settings, including after restarting the app. New videos use the last chosen volume (initially 70%) and gamma 1.0.
+Volume is shared across all videos and remembered after restarting the app (initially 70%). Opening another video keeps the current volume; older per-video volume settings are ignored. Gamma is saved separately for each video's canonical file path, including neutral gamma, and restored when reopening it. New videos use gamma 1.0.
 
 The gamma slider adjusts video midtones from 0.1 to 4.0: values above 1.0 lighten the picture and values below 1.0 darken it. Double-click the slider to reset it to 1.0 (unchanged). Changes apply immediately, including while paused, and the slider is available with the fullscreen controls. Gamma does not alter video files. At 1.0, video output bypasses the filter entirely. Non-neutral gamma converts and adjusts frames on the CPU, which can increase the cost of high-resolution playback.
 
