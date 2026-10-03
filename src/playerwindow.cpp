@@ -499,6 +499,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     commandsMenu->addSeparator();
     command("volumeUp", "Volume up 5%", {QKeySequence(Qt::Key_Up)}, [this] { adjustVolume(1); });
     command("volumeDown", "Volume down 5%", {QKeySequence(Qt::Key_Down)}, [this] { adjustVolume(-1); });
+    command("gammaDown", "Decrease gamma by 0.1", {QKeySequence(Qt::Key_W)}, [this] { gamma->setValue(gamma->value() - 1); });
+    command("gammaUp", "Increase gamma by 0.1", {QKeySequence(Qt::Key_E)}, [this] { gamma->setValue(gamma->value() + 1); });
     command("resetGamma", "Reset gamma to 1.0", {}, [this] { gamma->setValue(10); });
     commandsMenu->addSeparator();
     command("registerFileTypes", "Register file types", {}, [this] {
