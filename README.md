@@ -90,7 +90,7 @@ In either track popup, click a checkbox (or press Space on the highlighted item)
 | Volume slider | Adjust audio; set to zero to silence |
 | Gamma slider | Adjust midtones; double-click to reset to 1.0 |
 | W / E | Decrease / increase gamma by 0.1 (range 0.1–4.0) |
-| Mouse wheel / Up / Down | Increase or decrease volume in 5% steps, including fullscreen |
+| Mouse wheel / Up / Down | Adjust volume in 1% steps between 0 and 5%, and 5% steps above 5%, including fullscreen |
 | Enter / F / F11 | Toggle fullscreen (move the mouse into the bottom controls area to reveal the sliders) |
 | L / Folder button beside Gamma | Show/hide videos in the current folder to the right of the video; click a thumbnail or filename to play it |
 | Escape | Close the app |

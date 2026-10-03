@@ -1147,6 +1147,28 @@ private slots:
         wheel(&window, -120 * 30);
         QCOMPARE(volume->value(), 0);
         QCOMPARE(audio->volume(), 0.f);
+        for (int expected = 1; expected <= 5; ++expected) {
+            QTest::keyClick(&window, Qt::Key_Up);
+            QCOMPARE(volume->value(), expected);
+        }
+        QTest::keyClick(&window, Qt::Key_Up);
+        QCOMPARE(volume->value(), 10);
+        QTest::keyClick(&window, Qt::Key_Down);
+        QCOMPARE(volume->value(), 5);
+        for (int expected = 4; expected >= 0; --expected) {
+            QTest::keyClick(&window, Qt::Key_Down);
+            QCOMPARE(volume->value(), expected);
+        }
+        wheel(volume, 120 * 7);
+        QCOMPARE(volume->value(), 15);
+        wheel(volume, -120 * 4);
+        QCOMPARE(volume->value(), 3);
+        volume->setValue(6);
+        wheel(volume, -120);
+        QCOMPARE(volume->value(), 5);
+        wheel(volume, -120);
+        QCOMPARE(volume->value(), 4);
+        QVERIFY(qAbs(audio->volume() - 0.04f) < 0.001f);
     }
     void volumePersists() {
         for (int saved : {35, 0, 100}) {

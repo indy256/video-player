@@ -497,8 +497,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         command("subtitles", "Subtitles...", {QKeySequence(Qt::SHIFT | Qt::Key_S)}, [this] { chooseSubtitles(); })
     };
     commandsMenu->addSeparator();
-    command("volumeUp", "Volume up 5%", {QKeySequence(Qt::Key_Up)}, [this] { adjustVolume(1); });
-    command("volumeDown", "Volume down 5%", {QKeySequence(Qt::Key_Down)}, [this] { adjustVolume(-1); });
+    command("volumeUp", "Volume up", {QKeySequence(Qt::Key_Up)}, [this] { adjustVolume(1); });
+    command("volumeDown", "Volume down", {QKeySequence(Qt::Key_Down)}, [this] { adjustVolume(-1); });
     command("gammaDown", "Decrease gamma by 0.1", {QKeySequence(Qt::Key_W)}, [this] { gamma->setValue(gamma->value() - 1); });
     command("gammaUp", "Increase gamma by 0.1", {QKeySequence(Qt::Key_E)}, [this] { gamma->setValue(gamma->value() + 1); });
     command("resetGamma", "Reset gamma to 1.0", {}, [this] { gamma->setValue(10); });
@@ -807,7 +807,16 @@ bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
 }
 
 void PlayerWindow::adjustVolume(int steps) {
-    volume->setValue(volume->value() + steps * volume->singleStep());
+    int value = volume->value();
+    while (steps > 0 && value < volume->maximum()) {
+        value = qMin(volume->maximum(), value + (value < 5 ? 1 : 5));
+        --steps;
+    }
+    while (steps < 0 && value > volume->minimum()) {
+        value = value <= 5 ? value - 1 : qMax(5, value - 5);
+        ++steps;
+    }
+    volume->setValue(value);
 }
 
 void PlayerWindow::wheelEvent(QWheelEvent *event) {
