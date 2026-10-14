@@ -38,6 +38,9 @@ private:
     void savePosition();
     void restorePosition();
     void saveVideoSettings();
+    void restoreTrackSelections();
+    bool applyTrackSelection(bool audio, const QVariant &choice, bool reportErrors = true);
+    void saveTrackSelection(bool audio, const QVariant &choice);
     bool playbackReady() const;
     void toggleFullscreen();
     void updateFullscreen();
@@ -89,6 +92,8 @@ private:
     QString fileKey;
     bool restoringVideoSettings = false;
     qint64 pendingPosition = -1;
+    QVariant pendingAudioSelection;
+    QVariant pendingSubtitleSelection;
     SubtitleTrack externalSubtitles;
     QList<QVariant> excludedAudioTracks;
     QList<QVariant> excludedSubtitles;

@@ -1262,6 +1262,109 @@ private slots:
             reopened.findChild<QVideoWidget *>()->videoSink());
         QSettings().remove("audio/volume");
     }
+    void trackSelectionsPersist() {
+        const QString movie = temp.filePath("remember tracks.mkv");
+        const QString captions = temp.filePath("remember tracks.srt");
+        const QString audioFile = temp.filePath("remember tracks.wav");
+        QFile srt(captions);
+        QVERIFY(srt.open(QIODevice::WriteOnly));
+        srt.write("1\n00:00:00,000 --> 00:00:08,000\nRemembered caption\n");
+        srt.close();
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", {"-hide_banner", "-loglevel", "error", "-i", clip, "-i", captions,
+            "-map", "0:v", "-map", "0:a", "-map", "0:a", "-map", "1:0", "-c", "copy",
+            "-c:s", "srt", "-y", movie});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        ffmpeg.start("ffmpeg", {"-hide_banner", "-loglevel", "error", "-i", clip,
+            "-vn", "-c:a", "pcm_s16le", "-y", audioFile});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        QString identity = QFileInfo(movie).canonicalFilePath();
+#ifdef Q_OS_WIN
+        identity = identity.toCaseFolded();
+#endif
+        const QString settingsKey = "videos/" + QString::fromLatin1(QCryptographicHash::hash(
+            identity.toUtf8(), QCryptographicHash::Sha256).toHex());
+        {
+            PlayerWindow window;
+            window.show();
+            auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+            auto *subtitles = window.findChild<EmbeddedSubtitles *>();
+            window.openFile(movie);
+            QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+            QTRY_COMPARE(player->audioTracks().size(), 2);
+            QTRY_COMPARE(player->subtitleTracks().size(), 1);
+            QVERIFY(selectTrack(window, 1, Qt::Key_A));
+            QVERIFY(selectSubtitle(window, 0));
+            window.openFile(clip);
+            QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+            QCOMPARE(player->activeAudioTrack(), 0);
+            QCOMPARE(subtitles->activeTrack(), -1);
+            window.openFile(movie);
+            QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+            QTRY_COMPARE(player->activeAudioTrack(), 1);
+            QTRY_COMPARE(subtitles->activeTrack(), 0);
+            window.close();
+        }
+        // INI files do not preserve the numeric type across application restarts.
+        QSettings().setValue(settingsKey + "/audioTrack", "1");
+        QSettings().setValue(settingsKey + "/subtitleTrack", "0");
+        {
+            PlayerWindow window;
+            window.show();
+            auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+            window.openFile(movie);
+            QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+            QTRY_COMPARE(player->activeAudioTrack(), 1);
+            QTRY_COMPARE(window.findChild<EmbeddedSubtitles *>()->activeTrack(), 0);
+            QVERIFY(selectTrack(window, audioFile, Qt::Key_A));
+            QVERIFY(selectSubtitle(window, captions));
+            window.close();
+        }
+        {
+            PlayerWindow window;
+            window.show();
+            auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+            window.openFile(movie);
+            QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+            QTRY_COMPARE(window.findChild<ExternalAudio *>()->filePath(), audioFile);
+            QTRY_COMPARE(subtitleText(window), QString("Remembered caption"));
+            QCOMPARE(window.findChild<EmbeddedSubtitles *>()->activeTrack(), -1);
+            QVERIFY(selectSubtitle(window, -1));
+            window.close();
+        }
+        QVERIFY(QFile::remove(audioFile));
+        {
+            PlayerWindow window;
+            window.show();
+            auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+            window.openFile(movie);
+            QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+            QVERIFY(window.findChild<ExternalAudio *>()->filePath().isEmpty());
+            QCOMPARE(player->activeAudioTrack(), 0);
+            QCOMPARE(window.findChild<EmbeddedSubtitles *>()->activeTrack(), -1);
+            QVERIFY(subtitleText(window).isEmpty());
+            QVERIFY(selectSubtitle(window, captions));
+            window.close();
+        }
+        QVERIFY(QFile::remove(captions));
+        PlayerWindow window;
+        window.openFile(movie);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+        QCOMPARE(window.findChild<EmbeddedSubtitles *>()->activeTrack(), -1);
+        QVERIFY(subtitleText(window).isEmpty());
+        window.close();
+        QSettings().setValue(settingsKey + "/audioTrack", 99);
+        QSettings().setValue(settingsKey + "/subtitleTrack", 99);
+        PlayerWindow changed;
+        changed.openFile(movie);
+        auto *changedPlayer = changed.findChild<QMediaPlayer *>("mediaPlayer");
+        QTRY_VERIFY_WITH_TIMEOUT(changedPlayer->isPlaying(), 10000);
+        QCOMPARE(changedPlayer->activeAudioTrack(), 0);
+        QCOMPARE(changed.findChild<EmbeddedSubtitles *>()->activeTrack(), -1);
+    }
     void gammaPixels() {
         QVideoSink output;
         GammaFilter filter(&output);

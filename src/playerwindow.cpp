@@ -531,6 +531,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(player, &QMediaPlayer::playbackStateChanged, this, &PlayerWindow::updateControls);
     connect(player, &QMediaPlayer::mediaStatusChanged, this, &PlayerWindow::updateControls);
     connect(player, &QMediaPlayer::mediaStatusChanged, this, &PlayerWindow::restorePosition);
+    connect(player, &QMediaPlayer::mediaStatusChanged, this, &PlayerWindow::restoreTrackSelections);
+    connect(player, &QMediaPlayer::tracksChanged, this, &PlayerWindow::restoreTrackSelections);
     connect(player, &QMediaPlayer::seekableChanged, this, &PlayerWindow::restorePosition);
     connect(player, &QMediaPlayer::durationChanged, this, &PlayerWindow::restorePosition);
     connect(player, &QMediaPlayer::hasVideoChanged, this, &PlayerWindow::updateFullscreen);
@@ -681,12 +683,8 @@ void PlayerWindow::chooseAudioTrack(bool cycle) {
     if (menu.isEmpty()) menu.addAction("No audio tracks available")->setEnabled(false);
     const auto *selected = cycle ? menu.nextChoice() : execPopupMenu(menu, mapToGlobal(rect().center()));
     if (!selected || !selected->data().isValid()) return;
-    if (selected->data().metaType().id() == QMetaType::QString)
-        externalAudio->select(selected->data().toString());
-    else {
-        externalAudio->clear();
-        player->setActiveAudioTrack(selected->data().toInt());
-    }
+    if (!applyTrackSelection(true, selected->data())) return;
+    saveTrackSelection(true, selected->data());
     showNotification("Audio: " + QString(selected->text()).replace("&&", "&"));
 }
 
@@ -698,19 +696,61 @@ void PlayerWindow::chooseSubtitles(bool cycle) {
     menu.addFiles(subtitleFiles(player->source()), externalSubtitles.filePath());
     const auto *selected = cycle ? menu.nextChoice() : execPopupMenu(menu, mapToGlobal(rect().center()));
     if (!selected) return;
-    if (selected->data().metaType().id() == QMetaType::QString) {
+    if (!applyTrackSelection(false, selected->data())) return;
+    saveTrackSelection(false, selected->data());
+    showNotification("Subtitles: " + QString(selected->text()).replace("&&", "&"));
+}
+
+bool PlayerWindow::applyTrackSelection(bool audio, const QVariant &choice, bool reportErrors) {
+    if (!choice.isValid()) return false;
+    // INI settings may reload numeric values as strings; external paths are absolute.
+    bool isIndex = false;
+    const int index = choice.toInt(&isIndex);
+    if (!isIndex) {
+        const QFileInfo file(choice.toString());
+        if (!file.isFile() || !file.isReadable()) return false;
+        if (audio) {
+            externalAudio->select(file.absoluteFilePath());
+            return true;
+        }
         QString error;
-        if (!externalSubtitles.load(selected->data().toString(), error)) {
-            QMessageBox::warning(this, "Cannot load subtitles", error);
-            return;
+        if (!externalSubtitles.load(file.absoluteFilePath(), error)) {
+            if (reportErrors) QMessageBox::warning(this, "Cannot load subtitles", error);
+            return false;
         }
         embeddedSubtitles->select(-1);
     } else {
-        externalSubtitles.clear();
-        embeddedSubtitles->select(selected->data().toInt());
+        const int count = audio ? player->audioTracks().size() : player->subtitleTracks().size();
+        if (index < (audio ? 0 : -1) || index >= count) return false;
+        if (audio) {
+            externalAudio->clear();
+            player->setActiveAudioTrack(index);
+        } else {
+            externalSubtitles.clear();
+            embeddedSubtitles->select(index);
+        }
     }
     updateSubtitles();
-    showNotification("Subtitles: " + QString(selected->text()).replace("&&", "&"));
+    return true;
+}
+
+void PlayerWindow::saveTrackSelection(bool audio, const QVariant &choice) {
+    (audio ? pendingAudioSelection : pendingSubtitleSelection).clear();
+    if (fileKey.isEmpty()) return;
+    QSettings().setValue("videos/" + fileKey + (audio ? "/audioTrack" : "/subtitleTrack"), choice);
+}
+
+void PlayerWindow::restoreTrackSelections() {
+    const auto status = player->mediaStatus();
+    if (status != QMediaPlayer::LoadedMedia && status != QMediaPlayer::BufferedMedia
+        && status != QMediaPlayer::StalledMedia && status != QMediaPlayer::EndOfMedia) return;
+    // Clear pending choices before applying them: selection can emit more media signals.
+    const QVariant audio = pendingAudioSelection;
+    const QVariant subtitles = pendingSubtitleSelection;
+    pendingAudioSelection.clear();
+    pendingSubtitleSelection.clear();
+    applyTrackSelection(true, audio, false);
+    applyTrackSelection(false, subtitles, false);
 }
 
 void PlayerWindow::updateSubtitles() {
@@ -748,6 +788,8 @@ void PlayerWindow::openFile(const QString &path) {
         return;
     }
     savePosition();
+    pendingAudioSelection.clear();
+    pendingSubtitleSelection.clear();
     notificationTimer->stop();
     notification->hide();
     externalSubtitles.clear();
@@ -776,6 +818,9 @@ void PlayerWindow::openFile(const QString &path) {
     stage->setCurrentIndex(2);
     setWindowTitle(file.fileName() + QStringLiteral(" - Video Player v" VIDEO_PLAYER_VERSION));
     player->setSource(QUrl::fromLocalFile(file.absoluteFilePath()));
+    pendingAudioSelection = settings.value("audioTrack");
+    pendingSubtitleSelection = settings.value("subtitleTrack");
+    restoreTrackSelections();
     folderPanel->setFile(file.absoluteFilePath());
     restorePosition();
     player->play();
