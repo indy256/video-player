@@ -97,6 +97,9 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Test Qt source downloads
+        run: python -m unittest discover -s tests -p "test_*.py"
+
       - name: Identify Qt toolchain
         id: qt-toolchain
         shell: python {0}

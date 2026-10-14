@@ -6,3 +6,4 @@
 /assets/app-icon.icns
 /CMakeUserPresets.json
 *.user
+__pycache__/

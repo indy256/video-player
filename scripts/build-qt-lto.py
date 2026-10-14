@@ -28,13 +28,25 @@ def run(*args, cwd=None, capture=False):
                           text=True, stdout=subprocess.PIPE if capture else None).stdout
 
 
-def source(work, name, url, checksum, dirname):
+def source(work, name, url, checksum, dirname, fallback_url=None):
     archive = work / name
-    if not archive.exists():
-        run("curl", "-fL", "--retry", "3", url, "-o", archive)
-    with archive.open("rb") as stream:
-        if hashlib.file_digest(stream, "sha256").hexdigest() != checksum:
-            raise RuntimeError(f"Source checksum mismatch: {archive}")
+    partial = work / (name + ".part")
+    candidate = archive if archive.exists() else partial
+    try:
+        if candidate == partial:
+            try:
+                run("curl", "-fL", "--retry", "3", url, "-o", partial)
+            except subprocess.CalledProcessError:
+                if fallback_url is None:
+                    raise
+                run("curl", "-fL", "--retry", "3", fallback_url, "-o", partial)
+        with candidate.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != checksum:
+                raise RuntimeError(f"Source checksum mismatch: {candidate}")
+        if candidate == partial:
+            partial.replace(archive)
+    finally:
+        partial.unlink(missing_ok=True)
     dest = work / "src"
     result = dest / dirname
     if not (result / ".extracted").exists():
@@ -177,9 +189,12 @@ def main():
     for module, checksum in manifest.items():
         archive = f"{module}-everywhere-src-{args.version}.tar.xz"
         series = ".".join(args.version.split(".")[:2])
+        source_path = f"qt/{series}/{args.version}/submodules/{archive}"
+        # Qt moves older releases out of official_releases into archive.
         src = source(args.work, archive,
-                     f"https://download.qt.io/official_releases/qt/{series}/{args.version}/submodules/{archive}",
-                     checksum, archive.removesuffix(".tar.xz"))
+                     f"https://download.qt.io/official_releases/{source_path}",
+                     checksum, archive.removesuffix(".tar.xz"),
+                     fallback_url=f"https://download.qt.io/archive/{source_path}")
         build = args.work / f"{module}-build"
         options = common.copy()
         if module == "qtbase":
