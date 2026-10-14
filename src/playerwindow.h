@@ -48,6 +48,7 @@ private:
     void chooseAudioTrack(bool cycle = false);
     void chooseSubtitles(bool cycle = false);
     void updateSubtitles();
+    void updateSubtitleOverlay();
     void togglePlayback();
     void updateControls();
     void updateTimeline();
@@ -56,9 +57,11 @@ private:
     void adjustVolume(int steps);
     void showNotification(const QString &text);
     void updateNotification();
+    void updateOverlays();
     QLabel *notification;
+    QLabel *subtitleOverlay;
     QTimer *notificationTimer;
-    QTimer *notificationPositionTimer;
+    QTimer *overlayTimer;
     QMediaPlayer *player;
     ExternalAudio *externalAudio;
     EmbeddedSubtitles *embeddedSubtitles;

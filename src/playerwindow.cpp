@@ -41,11 +41,85 @@
 #include <QVideoSink>
 #include <QVideoFrame>
 #include <QPalette>
+#include <QTextLayout>
+#include <cmath>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
 
 namespace {
+void configureOverlay(QLabel *label, const QString &name) {
+    // Owned, non-interactive windows stay above the native video surface.
+    label->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint
+        | Qt::WindowDoesNotAcceptFocus | Qt::WindowTransparentForInput);
+    label->setObjectName(name);
+    label->setTextFormat(Qt::PlainText);
+    label->setAttribute(Qt::WA_ShowWithoutActivating);
+    label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    label->setAttribute(Qt::WA_TranslucentBackground);
+    label->setFocusPolicy(Qt::NoFocus);
+    label->hide();
+}
+
+// Preserve Qt's caption layout, painting only its background with rounded corners.
+class SubtitleOverlay final : public QLabel {
+public:
+    explicit SubtitleOverlay(QWidget *parent) : QLabel(parent) {
+        configureOverlay(this, "subtitleOverlay");
+    }
+
+    void layoutCaption(const QSize &picture) {
+        QString caption = text();
+        caption.replace('\n', QChar::LineSeparator);
+        if (picture == pictureSize && caption == layout.text()) return;
+        pictureSize = picture;
+        QFont font;
+        const qreal fontSize = picture.height() * 0.045;
+        font.setPointSize(qMax(1, int(fontSize)));
+        layout.setText(caption);
+        layout.setFont(font);
+        QTextOption option;
+        option.setUseDesignMetrics(true);
+        option.setAlignment(Qt::AlignCenter);
+        layout.setTextOption(option);
+        const int leading = QFontMetrics(font).leading();
+        qreal height = 0;
+        qreal width = 0;
+        layout.beginLayout();
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            line.setLineWidth(picture.width() * 0.9);
+            height += leading;
+            line.setPosition(QPointF(picture.width() * 0.05, height));
+            height += line.height();
+            width = qMax(width, line.naturalTextWidth());
+        }
+        layout.endLayout();
+        width += fontSize / 4;
+        textOffset = QPointF(-(picture.width() - width) / 2, 0);
+        setFixedSize(qMax(1, int(std::ceil(width))), qMax(1, int(std::ceil(height))));
+        update();
+    }
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 128));
+        painter.drawRoundedRect(QRectF(rect()), 6, 6);
+        QTextLayout::FormatRange format;
+        format.start = 0;
+        format.length = layout.text().size();
+        format.format.setForeground(Qt::white);
+        layout.draw(&painter, textOffset, {format});
+    }
+private:
+    QTextLayout layout;
+    QSize pictureSize;
+    QPointF textOffset;
+};
+
 // Finder and Dock opens share the same activation path as single-instance requests.
 class FileOpenEvents : public QObject {
 public:
@@ -248,19 +322,6 @@ QStringList subtitleFiles(const QUrl &source) {
     return files;
 }
 
-void setSubtitleText(QVideoSink *sink, const QString &text, bool paused) {
-    if (sink->subtitleText() == text && (!paused || sink->videoFrame().subtitleText() == text)) return;
-    sink->setSubtitleText(text);
-    if (paused) {
-        // Qt applies subtitle text when a new frame arrives. Refresh the existing
-        // frame as well so selecting, disabling, and seeking work while paused.
-        const QVideoFrame frame = sink->videoFrame();
-        if (frame.isValid()) {
-            sink->setVideoFrame({});
-            sink->setVideoFrame(frame);
-        }
-    }
-}
 }
 
 PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
@@ -328,28 +389,18 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     loading->setPalette(blackPalette);
     loading->setAutoFillBackground(true);
     stage->addWidget(loading);
-    // An owned tool window keeps the message above the native video surface.
-    notification = new QLabel(this, Qt::Tool | Qt::FramelessWindowHint
-        | Qt::WindowDoesNotAcceptFocus | Qt::WindowTransparentForInput);
-    notification->setObjectName("actionNotification");
-    notification->setTextFormat(Qt::PlainText);
-    notification->setAttribute(Qt::WA_ShowWithoutActivating);
-    notification->setAttribute(Qt::WA_TransparentForMouseEvents);
-    notification->setAttribute(Qt::WA_TranslucentBackground);
-    notification->setFocusPolicy(Qt::NoFocus);
+    notification = new QLabel(this);
+    configureOverlay(notification, "actionNotification");
     notification->setStyleSheet("QLabel { color: #759eff; background: transparent; "
         "font-size: 14px; border: none; }");
-    notification->hide();
+    subtitleOverlay = new SubtitleOverlay(this);
     notificationTimer = new QTimer(this);
     notificationTimer->setSingleShot(true);
     notificationTimer->setInterval(3000);
-    notificationPositionTimer = new QTimer(this);
-    notificationPositionTimer->setInterval(50);
-    connect(notificationPositionTimer, &QTimer::timeout, this, &PlayerWindow::updateNotification);
-    connect(notificationTimer, &QTimer::timeout, this, [this] {
-        notificationPositionTimer->stop();
-        notification->hide();
-    });
+    overlayTimer = new QTimer(this);
+    overlayTimer->setInterval(50);
+    connect(overlayTimer, &QTimer::timeout, this, &PlayerWindow::updateOverlays);
+    connect(notificationTimer, &QTimer::timeout, this, &PlayerWindow::updateOverlays);
     connect(video->videoSink(), &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
         if (frame.isValid() && !frameReady) {
             frameReady = true;
@@ -363,8 +414,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(embeddedSubtitles, &EmbeddedSubtitles::failed, this, [this](const QString &message) {
         QMessageBox::warning(this, "Cannot play subtitles", message);
     }, Qt::QueuedConnection);
-    connect(video->videoSink(), &QVideoSink::subtitleTextChanged,
-        this, &PlayerWindow::updateSubtitles, Qt::QueuedConnection);
     auto *screen = new QWidget;
     auto *screenLayout = new QHBoxLayout(screen);
     screenLayout->setContentsMargins(0, 0, 0, 0);
@@ -452,6 +501,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QPushButton:checked { background: #33415b; border-color: #759eff; }
         QPushButton:focus { border-color: #94b4ff; }
         QPushButton:disabled { color: #596173; background: #1b202c; border-color: #252c39; }
+        QSlider { background: #171c27; border: none; border-radius: 7px; padding: 0 7px; }
         QSlider::groove:horizontal { background: #2b3243; height: 5px; border-radius: 2px; }
         QSlider::sub-page:horizontal { background: #759eff; border-radius: 2px; }
         QSlider::handle:horizontal { background: #e5edff; width: 14px; margin: -5px 0; border-radius: 7px; }
@@ -663,7 +713,27 @@ void PlayerWindow::updateSubtitles() {
     if (player->playbackState() != QMediaPlayer::StoppedState)
         text = externalSubtitles.filePath().isEmpty()
             ? embeddedSubtitles->text() : externalSubtitles.textAt(player->position());
-    setSubtitleText(player->videoSink(), text, !player->isPlaying());
+    subtitleOverlay->setText(text);
+    updateOverlays();
+}
+
+void PlayerWindow::updateSubtitleOverlay() {
+    if (subtitleOverlay->text().isEmpty() || !isVisible() || isMinimized()
+        || stage->currentWidget() != video) {
+        subtitleOverlay->hide();
+        return;
+    }
+    QSize pictureSize = video->videoSink()->videoSize();
+    if (pictureSize.isEmpty()) pictureSize = video->size();
+    pictureSize.scale(video->size(), Qt::KeepAspectRatio);
+    QRect picture(QPoint(), pictureSize);
+    picture.moveCenter(video->rect().center());
+    static_cast<SubtitleOverlay *>(subtitleOverlay)->layoutCaption(pictureSize);
+    subtitleOverlay->move(video->mapToGlobal(QPoint(
+        picture.x() + (picture.width() - subtitleOverlay->width()) / 2,
+        picture.bottom() + 1 - picture.height() / 20 - subtitleOverlay->height())));
+    subtitleOverlay->show();
+    subtitleOverlay->raise();
 }
 
 void PlayerWindow::openFile(const QString &path) {
@@ -674,7 +744,6 @@ void PlayerWindow::openFile(const QString &path) {
     }
     savePosition();
     notificationTimer->stop();
-    notificationPositionTimer->stop();
     notification->hide();
     externalSubtitles.clear();
     externalAudio->clear();
@@ -740,9 +809,10 @@ void PlayerWindow::closeEvent(QCloseEvent *event) {
     clickTimer->stop();
     controlsTimer->stop();
     notificationTimer->stop();
-    notificationPositionTimer->stop();
+    overlayTimer->stop();
     notification->hide();
     fullscreenClose->hide();
+    subtitleOverlay->hide();
     savePosition();
     externalAudio->clear();
     embeddedSubtitles->clear();
@@ -974,17 +1044,25 @@ void PlayerWindow::skip(qint64 delta) {
 void PlayerWindow::showNotification(const QString &text) {
     notification->setText(text.simplified());
     notificationTimer->start();
-    notificationPositionTimer->start();
+    updateOverlays();
+}
+
+void PlayerWindow::updateOverlays() {
+    if (notificationTimer->isActive() || !subtitleOverlay->text().isEmpty()) {
+        if (!overlayTimer->isActive()) overlayTimer->start();
+    } else {
+        overlayTimer->stop();
+    }
     updateNotification();
+    updateSubtitleOverlay();
 }
 
 void PlayerWindow::updateNotification() {
-    if (!isVisible() || isMinimized()) {
+    if (!notificationTimer->isActive() || !isVisible() || isMinimized()) {
         notification->hide();
         return;
     }
     notification->setMaximumWidth(qMax(1, stage->width() - 24));
-    notification->setWordWrap(false);
     notification->adjustSize();
     notification->move(stage->mapToGlobal(QPoint(12, 12)));
     notification->show();

@@ -58,6 +58,10 @@ struct AudioSamples {
 };
 #endif
 
+static QString subtitleText(const PlayerWindow &window) {
+    return window.findChild<QLabel *>("subtitleOverlay")->text();
+}
+
 class DiagnosticApplication : public QApplication {
 public:
     using QApplication::QApplication;
@@ -704,22 +708,22 @@ private slots:
         QCOMPARE(player->activeSubtitleTrack(), -1);
         QVERIFY(cycleTrack(window, Qt::Key_S));
         QCOMPARE(player->activeSubtitleTrack(), -1);
-        QTRY_COMPARE(sink->subtitleText(), QString("first"));
+        QTRY_COMPARE(subtitleText(window), QString("first"));
         QVERIFY(cycleTrack(window, Qt::Key_S));
-        QTRY_COMPARE(sink->subtitleText(), QString("second"));
+        QTRY_COMPARE(subtitleText(window), QString("second"));
         QVERIFY(cycleTrack(window, Qt::Key_S));
         QCOMPARE(player->activeSubtitleTrack(), -1);
-        QVERIFY(sink->subtitleText().isEmpty());
+        QVERIFY(subtitleText(window).isEmpty());
         QVERIFY(toggleTrackCheck(window, 0, Qt::Key_S));
         QVERIFY(toggleTrackCheck(window, first, Qt::Key_S));
         QVERIFY(cycleTrack(window, Qt::Key_S));
-        QCOMPARE(sink->subtitleText(), QString("second"));
+        QCOMPARE(subtitleText(window), QString("second"));
         QVERIFY(toggleTrackCheck(window, -1, Qt::Key_S, true));
         QVERIFY(cycleTrack(window, Qt::Key_S));
-        QCOMPARE(sink->subtitleText(), QString("second"));
+        QCOMPARE(subtitleText(window), QString("second"));
         QVERIFY(toggleTrackCheck(window, second, Qt::Key_S));
         QVERIFY(cycleTrack(window, Qt::Key_S));
-        QCOMPARE(sink->subtitleText(), QString("second"));
+        QCOMPARE(subtitleText(window), QString("second"));
         QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
         QVERIFY(qAbs(player->position() - position) < 100);
         QVERIFY(subtitleChanges.isEmpty());
@@ -795,28 +799,40 @@ private slots:
         QTRY_VERIFY(qAbs(sink->videoFrame().startTime() / 1000 - 1500) < 100);
         QVERIFY(selectSubtitle(window, path));
         QCOMPARE(player->activeSubtitleTrack(), -1);
-        QCOMPARE(sink->subtitleText(), QString("First external"));
-        QCOMPARE(sink->videoFrame().subtitleText(), QString("First external"));
+        QCOMPARE(subtitleText(window), QString("First external"));
+        QVERIFY(sink->subtitleText().isEmpty());
+        QVERIFY(sink->videoFrame().subtitleText().isEmpty());
+        auto *caption = window.findChild<QLabel *>("subtitleOverlay");
+        QTRY_VERIFY(caption->isVisible());
+        const QImage background = caption->grab().toImage();
+        QCOMPARE(background.pixelColor(0, 0).alpha(), 0);
+        QVERIFY(background.pixelColor(background.width() / 2, 0).alpha() > 0);
+        // Expiring an action notification must leave the paused caption visible.
+        auto *notification = window.findChild<QLabel *>("actionNotification");
+        QVERIFY(notification->isVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(!notification->isVisible(), 4000);
+        QVERIFY(caption->isVisible());
+        QCOMPARE(subtitleText(window), QString("First external"));
         auto *gamma = window.findChild<QSlider *>("gamma");
         gamma->setValue(20);
-        QCOMPARE(sink->subtitleText(), QString("First external"));
+        QCOMPARE(subtitleText(window), QString("First external"));
         gamma->setValue(10);
-        QCOMPARE(sink->subtitleText(), QString("First external"));
+        QCOMPARE(subtitleText(window), QString("First external"));
         player->setPosition(2200);
-        QTRY_COMPARE(sink->videoFrame().subtitleText(), QString("Second external"));
+        QTRY_COMPARE(subtitleText(window), QString("Second external"));
         player->setPosition(3500);
-        QTRY_VERIFY(sink->videoFrame().subtitleText().isEmpty());
+        QTRY_VERIFY(subtitleText(window).isEmpty());
         player->setPosition(1500);
-        QTRY_COMPARE(sink->videoFrame().subtitleText(), QString("First external"));
+        QTRY_COMPARE(subtitleText(window), QString("First external"));
         window.showFullScreen();
         QVERIFY(selectSubtitle(window, -1));
-        QTRY_VERIFY(sink->videoFrame().subtitleText().isEmpty());
+        QTRY_VERIFY(subtitleText(window).isEmpty());
         QVERIFY(selectSubtitle(window, 0));
         QCOMPARE(window.findChild<EmbeddedSubtitles *>()->activeTrack(), 0);
         QCOMPARE(player->activeSubtitleTrack(), -1);
         player->setPosition(500);
         player->play();
-        QTRY_COMPARE_WITH_TIMEOUT(sink->videoFrame().subtitleText(), QString("First external"), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(subtitleText(window), QString("First external"), 10000);
         auto *reader = window.findChild<QMediaPlayer *>("subtitlePlayer");
         QCOMPARE(reader->activeAudioTrack(), -1);
         QCOMPARE(reader->activeVideoTrack(), -1);
@@ -829,20 +845,19 @@ private slots:
         QTRY_COMPARE(reader->playbackState(), QMediaPlayer::PausedState);
         for (const auto &status : pauseStatuses)
             QVERIFY(status.first().value<QMediaPlayer::MediaStatus>() != QMediaPlayer::LoadedMedia);
-        const QString pausedCaption = sink->subtitleText();
+        const QString pausedCaption = subtitleText(window);
         QVERIFY(!pausedCaption.isEmpty());
-        QTRY_COMPARE(sink->videoFrame().subtitleText(), pausedCaption);
         gamma->setValue(16);
-        QCOMPARE(sink->subtitleText(), pausedCaption);
-        QCOMPARE(sink->videoFrame().subtitleText(), pausedCaption);
+        QCOMPARE(subtitleText(window), pausedCaption);
+        QVERIFY(sink->videoFrame().subtitleText().isEmpty());
         gamma->setValue(10);
-        QCOMPARE(sink->subtitleText(), pausedCaption);
+        QCOMPARE(subtitleText(window), pausedCaption);
         player->setPosition(2200);
         QCOMPARE(reader->position(), player->position());
         player->setPlaybackRate(1.5);
         QCOMPARE(reader->playbackRate(), 1.5);
         player->play();
-        QTRY_COMPARE(sink->subtitleText(), QString("Second external"));
+        QTRY_COMPARE(subtitleText(window), QString("Second external"));
         QTRY_COMPARE(reader->mediaStatus(), QMediaPlayer::EndOfMedia);
         QVERIFY(player->isPlaying());
         QSignalSpy subtitleStates(reader, &QMediaPlayer::playbackStateChanged);
@@ -850,16 +865,16 @@ private slots:
         QVERIFY(subtitleStates.isEmpty()); // No repeated restarts after the final caption.
         player->setPlaybackRate(1);
         player->setPosition(1500);
-        QTRY_COMPARE(sink->subtitleText(), QString("First external"));
+        QTRY_COMPARE(subtitleText(window), QString("First external"));
         player->pause();
         QVERIFY(selectSubtitle(window, path));
         QCOMPARE(player->activeSubtitleTrack(), -1);
         player->play();
-        QTRY_COMPARE_WITH_TIMEOUT(sink->subtitleText(), QString("Second external"), 5000);
-        QTRY_VERIFY_WITH_TIMEOUT(sink->subtitleText().isEmpty(), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(subtitleText(window), QString("Second external"), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(subtitleText(window).isEmpty(), 5000);
         window.openFile(clip);
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && sink->videoFrame().isValid(), 10000);
-        QTRY_VERIFY(sink->subtitleText().isEmpty());
+        QTRY_VERIFY(subtitleText(window).isEmpty());
         QVERIFY(reader->source().isEmpty());
     }
     void subtitleCyclingExample() {
@@ -938,9 +953,9 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(qAbs(sink->videoFrame().startTime() / 1000 - 57000) < 1000, 10000);
         for (const auto &file : files) {
             QVERIFY(selectSubtitle(window, folder.filePath(file)));
-            QVERIFY(!sink->subtitleText().isEmpty());
-            if (file.contains("Eng")) QVERIFY(sink->subtitleText().contains("What are you doing here?"));
-            else QVERIFY(sink->subtitleText().contains(QString::fromUtf8("Скарлетт")));
+            QVERIFY(!subtitleText(window).isEmpty());
+            if (file.contains("Eng")) QVERIFY(subtitleText(window).contains("What are you doing here?"));
+            else QVERIFY(subtitleText(window).contains(QString::fromUtf8("Скарлетт")));
         }
         QVERIFY(selectSubtitle(window, folder.filePath(files.first())));
         const QString capture = qEnvironmentVariable("VIDEO_PLAYER_SUBTITLE_CAPTURE");
