@@ -434,15 +434,21 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     controlsPanel->setObjectName("controlsPanel");
     controlsPanel->setAttribute(Qt::WA_ShowWithoutActivating);
     auto *controls = new QGridLayout(controlsPanel);
-    controls->setContentsMargins(0, 0, 0, 0);
+    controls->setContentsMargins(12, 0, 12, 0);
     controls->setHorizontalSpacing(16);
     controls->setVerticalSpacing(4);
     controls->setColumnStretch(0, 1);
     controls->addWidget(timeline, 0, 0, Qt::AlignVCenter);
-    timeLabel = new QLabel;
-    timeLabel->setObjectName("timeReadout");
+    const auto addReadout = [controls](const QString &name, const QString &text, int column,
+                                     Qt::Alignment alignment = Qt::AlignCenter) {
+        auto *label = new QLabel(text);
+        label->setObjectName(name + "Readout");
+        label->setAlignment(alignment);
+        controls->addWidget(label, 1, column);
+        return label;
+    };
+    timeLabel = addReadout("time", {}, 0, Qt::AlignLeft | Qt::AlignVCenter);
     timeLabel->setAccessibleName("Current and total time, video codec and resolution");
-    controls->addWidget(timeLabel, 1, 0);
     const auto addControlSlider = [this, controls](const QString &name, const QString &title, int column) {
         auto *slider = new SeekSlider;
         slider->setObjectName(name);
@@ -456,24 +462,20 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     volume->setSingleStep(5);
     volume->setRange(0, 100);
     volume->setValue(savedVolume);
-    auto *volumeLabel = new QLabel(QString("Volume %1").arg(savedVolume));
-    volumeLabel->setObjectName("volumeReadout");
-    controls->addWidget(volumeLabel, 1, 1);
+    auto *volumeLabel = addReadout("volume", QString("Volume %1").arg(savedVolume), 1);
     gamma = addControlSlider("gamma", "Gamma", 2);
     gamma->setRange(1, 40);
     gamma->setValue(10);
     gamma->setPageStep(5);
-    auto *gammaLabel = new QLabel("Gamma 1.0");
-    gammaLabel->setObjectName("gammaReadout");
+    auto *gammaLabel = addReadout("gamma", "Gamma 1.0", 2);
     gamma->setToolTip("Gamma 1.0 (double-click to reset)");
-    controls->addWidget(gammaLabel, 1, 2);
-    auto *filesButton = new QPushButton("Folder");
+    auto *filesButton = new QPushButton("List");
     filesButton->setObjectName("folderFilesButton");
     filesButton->setCheckable(true);
     filesButton->setFocusPolicy(Qt::NoFocus);
     filesButton->setToolTip("Show/hide folder files (L)");
     filesButton->setAccessibleName("Show/hide folder files");
-    controls->addWidget(filesButton, 0, 3, 2, 1, Qt::AlignVCenter);
+    controls->addWidget(filesButton, 0, 3, Qt::AlignVCenter);
     connect(filesButton, &QPushButton::toggled, folderPanel, &QWidget::setVisible);
     connect(gamma, &QSlider::valueChanged, this, [gammaFilter, gammaLabel, this](int value) {
         const QString text = QString("Gamma %1").arg(value / 10.0, 0, 'f', 1);
@@ -497,6 +499,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QWidget#emptyStage { background: #000000; border: 1px solid #252b3a; border-radius: 12px; }
         QWidget#emptyStage QLabel { background: transparent; border: none; }
         QPushButton { background: #242b3b; color: #e4eaf8; border: 1px solid #333e53; border-radius: 7px; padding: 9px 16px; }
+        QPushButton#folderFilesButton { padding: 0 12px; }
         QPushButton:hover { background: #33415b; }
         QPushButton:checked { background: #33415b; border-color: #759eff; }
         QPushButton:focus { border-color: #94b4ff; }
@@ -508,6 +511,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QSlider:disabled::sub-page:horizontal { background: #2b3243; }
         QToolTip { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; }
     )");
+    volume->ensurePolished();
+    filesButton->setFixedHeight(qRound(volume->sizeHint().height() * 1.5));
     connect(emptyOpen, &QPushButton::clicked, this, &PlayerWindow::chooseFile);
     connect(volume, &QSlider::valueChanged, this, [audio, volumeLabel, this](int value) {
         volumeLabel->setText(QString("Volume %1").arg(value));
@@ -970,7 +975,7 @@ void PlayerWindow::updateFullscreen() {
         if (layout->indexOf(controlsPanel) < 0) layout->addWidget(controlsPanel);
         controlsPanel->show();
     }
-    controlsPanel->layout()->setContentsMargins(fullscreen ? QMargins(12, 12, 12, 12) : QMargins());
+    controlsPanel->layout()->setContentsMargins(12, fullscreen ? 12 : 0, 12, fullscreen ? 12 : 0);
     layout->setContentsMargins(fullscreen ? QMargins() : QMargins(0, 0, 0, 12));
     layout->setSpacing(fullscreen ? 0 : 16);
     const bool showMedia = fullscreen || (!player->source().isEmpty() && player->error() == QMediaPlayer::NoError);
