@@ -40,7 +40,6 @@ private:
     void saveVideoSettings();
     void restoreTrackSelections();
     bool applyTrackSelection(bool audio, const QVariant &choice, bool reportErrors = true);
-    void saveTrackSelection(bool audio, const QVariant &choice);
     bool playbackReady() const;
     void toggleFullscreen();
     void updateFullscreen();
@@ -48,8 +47,7 @@ private:
     void chooseFile();
     void showPopupMenu(const QPoint &position);
     QAction *execPopupMenu(QMenu &menu, const QPoint &position);
-    void chooseAudioTrack(bool cycle = false);
-    void chooseSubtitles(bool cycle = false);
+    void chooseTrack(bool audio, bool cycle = false);
     void updateSubtitles();
     void updateSubtitleOverlay();
     void togglePlayback();

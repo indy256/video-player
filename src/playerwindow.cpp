@@ -43,6 +43,7 @@
 #include <QPalette>
 #include <QTextLayout>
 #include <cmath>
+#include <functional>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -154,8 +155,8 @@ void setCommandLabel(QAction *action, const QString &label) {
 class TrackMenu final : public QMenu {
 public:
     TrackMenu(QMediaPlayer *player, QWidget *parent, const QString &name, const QString &title,
-              QList<QVariant> &excluded)
-        : QMenu(parent), excluded(excluded) {
+              QList<QVariant> &excluded, std::function<void()> saveExclusions)
+        : QMenu(parent), excluded(excluded), saveExclusions(std::move(saveExclusions)) {
         setObjectName(name);
         setAccessibleName(title);
         // Another instance can open a different file while a track menu is visible.
@@ -271,8 +272,10 @@ private:
         action->toggle();
         if (action->isChecked()) excluded.removeAll(action->data());
         else excluded.append(action->data());
+        saveExclusions();
     }
     QList<QVariant> &excluded;
+    std::function<void()> saveExclusions;
     QAction *currentChoice = nullptr;
     QAction *checkboxPress = nullptr;
 };
@@ -572,10 +575,10 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     };
     commandsMenu->addSeparator();
     const QList<QAction *> tracks{
-        command("nextAudio", "Next enabled audio track", {QKeySequence(Qt::Key_A)}, [this] { chooseAudioTrack(true); }),
-        command("audioTracks", "Audio tracks...", {QKeySequence(Qt::SHIFT | Qt::Key_A)}, [this] { chooseAudioTrack(); }),
-        command("nextSubtitles", "Next enabled subtitle track", {QKeySequence(Qt::Key_S)}, [this] { chooseSubtitles(true); }),
-        command("subtitles", "Subtitles...", {QKeySequence(Qt::SHIFT | Qt::Key_S)}, [this] { chooseSubtitles(); })
+        command("nextAudio", "Next enabled audio track", {QKeySequence(Qt::Key_A)}, [this] { chooseTrack(true, true); }),
+        command("audioTracks", "Audio tracks...", {QKeySequence(Qt::SHIFT | Qt::Key_A)}, [this] { chooseTrack(true); }),
+        command("nextSubtitles", "Next enabled subtitle track", {QKeySequence(Qt::Key_S)}, [this] { chooseTrack(false, true); }),
+        command("subtitles", "Subtitles...", {QKeySequence(Qt::SHIFT | Qt::Key_S)}, [this] { chooseTrack(false); })
     };
     commandsMenu->addSeparator();
     command("volumeUp", "Volume up", {QKeySequence(Qt::Key_Up)}, [this] { adjustVolume(1); });
@@ -676,29 +679,27 @@ void PlayerWindow::showPopupMenu(const QPoint &position) {
     execPopupMenu(*commandsMenu, position);
 }
 
-void PlayerWindow::chooseAudioTrack(bool cycle) {
-    TrackMenu menu(player, this, "audioTrackMenu", "Audio tracks", excludedAudioTracks);
-    menu.addTracks(player->audioTracks(), externalAudio->filePath().isEmpty() ? player->activeAudioTrack() : -1, true);
-    menu.addFiles(ExternalAudio::matchingFiles(player->source()), externalAudio->filePath());
+void PlayerWindow::chooseTrack(bool audio, bool cycle) {
+    auto &excluded = audio ? excludedAudioTracks : excludedSubtitles;
+    TrackMenu menu(player, this, audio ? "audioTrackMenu" : "subtitleMenu",
+                   audio ? "Audio tracks" : "Subtitles", excluded, [&] {
+        if (!fileKey.isEmpty())
+            QSettings().setValue("videos/" + fileKey
+                + (audio ? "/excludedAudioTracks" : "/excludedSubtitles"), excluded);
+    });
+    const QString external = audio ? externalAudio->filePath() : externalSubtitles.filePath();
+    const int active = audio ? player->activeAudioTrack() : embeddedSubtitles->activeTrack();
+    if (!audio) menu.addChoice("Off", -1, external.isEmpty() && active < 0);
+    menu.addTracks(audio ? player->audioTracks() : player->subtitleTracks(),
+                   external.isEmpty() ? active : -1, audio);
+    menu.addFiles(audio ? ExternalAudio::matchingFiles(player->source()) : subtitleFiles(player->source()), external);
     if (menu.isEmpty()) menu.addAction("No audio tracks available")->setEnabled(false);
     const auto *selected = cycle ? menu.nextChoice() : execPopupMenu(menu, mapToGlobal(rect().center()));
-    if (!selected || !selected->data().isValid()) return;
-    if (!applyTrackSelection(true, selected->data())) return;
-    saveTrackSelection(true, selected->data());
-    showNotification("Audio: " + QString(selected->text()).replace("&&", "&"));
-}
-
-void PlayerWindow::chooseSubtitles(bool cycle) {
-    TrackMenu menu(player, this, "subtitleMenu", "Subtitles", excludedSubtitles);
-    const bool embedded = externalSubtitles.filePath().isEmpty();
-    menu.addChoice("Off", -1, embedded && embeddedSubtitles->activeTrack() < 0);
-    menu.addTracks(player->subtitleTracks(), embedded ? embeddedSubtitles->activeTrack() : -1, false);
-    menu.addFiles(subtitleFiles(player->source()), externalSubtitles.filePath());
-    const auto *selected = cycle ? menu.nextChoice() : execPopupMenu(menu, mapToGlobal(rect().center()));
-    if (!selected) return;
-    if (!applyTrackSelection(false, selected->data())) return;
-    saveTrackSelection(false, selected->data());
-    showNotification("Subtitles: " + QString(selected->text()).replace("&&", "&"));
+    if (!selected || !applyTrackSelection(audio, selected->data())) return;
+    (audio ? pendingAudioSelection : pendingSubtitleSelection).clear();
+    if (!fileKey.isEmpty())
+        QSettings().setValue("videos/" + fileKey + (audio ? "/audioTrack" : "/subtitleTrack"), selected->data());
+    showNotification((audio ? "Audio: " : "Subtitles: ") + QString(selected->text()).replace("&&", "&"));
 }
 
 bool PlayerWindow::applyTrackSelection(bool audio, const QVariant &choice, bool reportErrors) {
@@ -732,12 +733,6 @@ bool PlayerWindow::applyTrackSelection(bool audio, const QVariant &choice, bool 
     }
     updateSubtitles();
     return true;
-}
-
-void PlayerWindow::saveTrackSelection(bool audio, const QVariant &choice) {
-    (audio ? pendingAudioSelection : pendingSubtitleSelection).clear();
-    if (fileKey.isEmpty()) return;
-    QSettings().setValue("videos/" + fileKey + (audio ? "/audioTrack" : "/subtitleTrack"), choice);
 }
 
 void PlayerWindow::restoreTrackSelections() {
@@ -809,6 +804,8 @@ void PlayerWindow::openFile(const QString &path) {
     QSettings settings;
     pendingPosition = settings.value("positions/" + fileKey, 0).toLongLong();
     settings.beginGroup("videos/" + fileKey);
+    excludedAudioTracks = settings.value("excludedAudioTracks").toList();
+    excludedSubtitles = settings.value("excludedSubtitles").toList();
     restoringVideoSettings = true;
     // QSlider clamps restored values to its configured range.
     gamma->setValue(settings.value("gamma", 10).toInt());

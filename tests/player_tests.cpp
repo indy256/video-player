@@ -728,9 +728,15 @@ private slots:
         QVERIFY(qAbs(player->position() - position) < 100);
         QVERIFY(subtitleChanges.isEmpty());
 
-        // A new video starts with every item checked again, including Off.
+        // Unseen videos start checked; reopening restores each video's exclusions.
         window.openFile(clip);
         QTRY_COMPARE(player->audioTracks().size(), 1);
+        for (auto key : {Qt::Key_A, Qt::Key_S}) {
+            QVERIFY(withTrackMenu(window, key, [&](QMenu &menu) {
+                for (auto *action : menu.actions())
+                    if (action->isCheckable()) QVERIFY(action->isChecked());
+            }));
+        }
         window.openFile(movie);
         QTRY_COMPARE(player->audioTracks().size(), 2);
         QTRY_VERIFY(player->isPlaying());
@@ -743,7 +749,38 @@ private slots:
                 const QString capture = qEnvironmentVariable("VIDEO_PLAYER_TRACK_MENU_CAPTURE");
                 if (!capture.isEmpty()) menu.grab().save(capture + (key == Qt::Key_S ? "-subtitles.png" : "-audio.png"));
             }));
-            QCOMPARE(checked, key == Qt::Key_S ? 4 : 3);
+            QCOMPARE(checked, key == Qt::Key_S ? 0 : 1);
+        }
+        window.close();
+        PlayerWindow reopened;
+        reopened.show();
+        reopened.openFile(movie);
+        auto *reopenedPlayer = reopened.findChild<QMediaPlayer *>("mediaPlayer");
+        QTRY_VERIFY(reopenedPlayer->isPlaying());
+        for (auto key : {Qt::Key_A, Qt::Key_S}) {
+            QVERIFY(withTrackMenu(reopened, key, [&](QMenu &menu) {
+                for (auto *action : menu.actions()) {
+                    if (!action->isCheckable()) continue;
+                    QCOMPARE(action->isChecked(), key == Qt::Key_A && action->data() == QVariant(1));
+                }
+            }));
+        }
+        // Re-enabling a saved exclusion must also survive reopening.
+        QVERIFY(toggleTrackCheck(reopened, audio, Qt::Key_A));
+        QVERIFY(toggleTrackCheck(reopened, -1, Qt::Key_S));
+        reopened.openFile(clip);
+        reopened.openFile(movie);
+        QTRY_VERIFY(reopenedPlayer->isPlaying());
+        for (auto key : {Qt::Key_A, Qt::Key_S}) {
+            QVERIFY(withTrackMenu(reopened, key, [&](QMenu &menu) {
+                for (auto *action : menu.actions()) {
+                    if (!action->isCheckable()) continue;
+                    const bool expected = key == Qt::Key_A
+                        ? action->data() == QVariant(1) || action->data() == QVariant(audio)
+                        : action->data() == QVariant(-1);
+                    QCOMPARE(action->isChecked(), expected);
+                }
+            }));
         }
     }
     void subtitleParsing() {
