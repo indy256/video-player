@@ -54,6 +54,11 @@ private:
     void seekToSlider();
     void skip(qint64 delta);
     void adjustVolume(int steps);
+    void showNotification(const QString &text);
+    void updateNotification();
+    QLabel *notification;
+    QTimer *notificationTimer;
+    QTimer *notificationPositionTimer;
     QMediaPlayer *player;
     ExternalAudio *externalAudio;
     EmbeddedSubtitles *embeddedSubtitles;

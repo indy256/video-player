@@ -328,6 +328,28 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     loading->setPalette(blackPalette);
     loading->setAutoFillBackground(true);
     stage->addWidget(loading);
+    // An owned tool window keeps the message above the native video surface.
+    notification = new QLabel(this, Qt::Tool | Qt::FramelessWindowHint
+        | Qt::WindowDoesNotAcceptFocus | Qt::WindowTransparentForInput);
+    notification->setObjectName("actionNotification");
+    notification->setTextFormat(Qt::PlainText);
+    notification->setAttribute(Qt::WA_ShowWithoutActivating);
+    notification->setAttribute(Qt::WA_TransparentForMouseEvents);
+    notification->setAttribute(Qt::WA_TranslucentBackground);
+    notification->setFocusPolicy(Qt::NoFocus);
+    notification->setStyleSheet("QLabel { color: #759eff; background: transparent; "
+        "font-size: 14px; border: none; }");
+    notification->hide();
+    notificationTimer = new QTimer(this);
+    notificationTimer->setSingleShot(true);
+    notificationTimer->setInterval(3000);
+    notificationPositionTimer = new QTimer(this);
+    notificationPositionTimer->setInterval(50);
+    connect(notificationPositionTimer, &QTimer::timeout, this, &PlayerWindow::updateNotification);
+    connect(notificationTimer, &QTimer::timeout, this, [this] {
+        notificationPositionTimer->stop();
+        notification->hide();
+    });
     connect(video->videoSink(), &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
         if (frame.isValid() && !frameReady) {
             frameReady = true;
@@ -411,6 +433,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         saveVideoSettings();
         gammaFilter->apply(player, value);
         updateSubtitles();
+        if (!restoringVideoSettings) showNotification(text);
     });
     layout->addWidget(controlsPanel);
     fullscreenClose = new FullscreenCloseButton(this);
@@ -436,10 +459,11 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QToolTip { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; }
     )");
     connect(emptyOpen, &QPushButton::clicked, this, &PlayerWindow::chooseFile);
-    connect(volume, &QSlider::valueChanged, this, [audio, volumeLabel](int value) {
+    connect(volume, &QSlider::valueChanged, this, [audio, volumeLabel, this](int value) {
         volumeLabel->setText(QString("Volume %1").arg(value));
         audio->setVolume(value / 100.f);
         QSettings().setValue("audio/volume", value);
+        showNotification(QString("Volume %1%").arg(value));
     });
     connect(timeline, &QSlider::valueChanged, this, &PlayerWindow::seekToSlider);
     connect(timeline, &QSlider::sliderReleased, this, &PlayerWindow::updateTimeline);
@@ -608,6 +632,7 @@ void PlayerWindow::chooseAudioTrack(bool cycle) {
         externalAudio->clear();
         player->setActiveAudioTrack(selected->data().toInt());
     }
+    showNotification("Audio: " + QString(selected->text()).replace("&&", "&"));
 }
 
 void PlayerWindow::chooseSubtitles(bool cycle) {
@@ -630,6 +655,7 @@ void PlayerWindow::chooseSubtitles(bool cycle) {
         embeddedSubtitles->select(selected->data().toInt());
     }
     updateSubtitles();
+    showNotification("Subtitles: " + QString(selected->text()).replace("&&", "&"));
 }
 
 void PlayerWindow::updateSubtitles() {
@@ -647,6 +673,9 @@ void PlayerWindow::openFile(const QString &path) {
         return;
     }
     savePosition();
+    notificationTimer->stop();
+    notificationPositionTimer->stop();
+    notification->hide();
     externalSubtitles.clear();
     externalAudio->clear();
     excludedAudioTracks.clear();
@@ -710,6 +739,9 @@ void PlayerWindow::restorePosition() {
 void PlayerWindow::closeEvent(QCloseEvent *event) {
     clickTimer->stop();
     controlsTimer->stop();
+    notificationTimer->stop();
+    notificationPositionTimer->stop();
+    notification->hide();
     fullscreenClose->hide();
     savePosition();
     externalAudio->clear();
@@ -807,6 +839,7 @@ bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
 }
 
 void PlayerWindow::adjustVolume(int steps) {
+    if (steps == 0) return;
     int value = volume->value();
     while (steps > 0 && value < volume->maximum()) {
         value = qMin(volume->maximum(), value + (value < 5 ? 1 : 5));
@@ -816,7 +849,8 @@ void PlayerWindow::adjustVolume(int steps) {
         value = value <= 5 ? value - 1 : qMax(5, value - 5);
         ++steps;
     }
-    volume->setValue(value);
+    if (value == volume->value()) showNotification(QString("Volume %1%").arg(value));
+    else volume->setValue(value);
 }
 
 void PlayerWindow::wheelEvent(QWheelEvent *event) {
@@ -930,7 +964,31 @@ void PlayerWindow::seekToSlider() {
 }
 
 void PlayerWindow::skip(qint64 delta) {
-    if (timeline->isEnabled()) externalAudio->seek(qBound(qint64(0), player->position() + delta, player->duration()));
+    if (!timeline->isEnabled()) return;
+    const qint64 position = qBound(qint64(0), player->position() + delta, player->duration());
+    externalAudio->seek(position);
+    showNotification(QString("%1 %2 seconds — %3")
+        .arg(delta < 0 ? "Backward" : "Forward").arg(qAbs(delta) / 1000).arg(timestamp(position)));
+}
+
+void PlayerWindow::showNotification(const QString &text) {
+    notification->setText(text.simplified());
+    notificationTimer->start();
+    notificationPositionTimer->start();
+    updateNotification();
+}
+
+void PlayerWindow::updateNotification() {
+    if (!isVisible() || isMinimized()) {
+        notification->hide();
+        return;
+    }
+    notification->setMaximumWidth(qMax(1, stage->width() - 24));
+    notification->setWordWrap(false);
+    notification->adjustSize();
+    notification->move(stage->mapToGlobal(QPoint(12, 12)));
+    notification->show();
+    notification->raise();
 }
 
 void PlayerWindow::dragEnterEvent(QDragEnterEvent *event) {
