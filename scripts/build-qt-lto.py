@@ -142,6 +142,23 @@ def patch_mingw(src):
         simd.write_text(content)
 
 
+def patch_msvc_multimedia(src):
+    # QPlaybackOptions' inline move operations can reference its shared-data
+    # destructor from QtMultimediaQuick. Qt 6.10/6.11 omit the DLL export on
+    # that specialization, causing LNK2001 when linking the shared QML module.
+    header = src / "src/multimedia/playback/qplaybackoptions.h"
+    if not header.exists():
+        return  # QPlaybackOptions was introduced in Qt 6.10.
+    original = "QT_DECLARE_QESDP_SPECIALIZATION_DTOR(QPlaybackOptionsPrivate)"
+    exported = ("QT_DECLARE_QESDP_SPECIALIZATION_DTOR_WITH_EXPORT("
+                "QPlaybackOptionsPrivate, Q_MULTIMEDIA_EXPORT)")
+    content = header.read_text()
+    if original not in content and exported not in content:
+        raise RuntimeError("Unrecognized QPlaybackOptions destructor declaration")
+    if original in content:
+        header.write_text(content.replace(original, exported))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", choices=FFMPEG, default="6.11.2")
@@ -207,6 +224,8 @@ def main():
                 patch_mingw(src)
                 options += [f"-DCMAKE_PROJECT_QtBase_INCLUDE={(SCRIPTS / 'qt-mingw-lto.cmake').as_posix()}"]
         if module == "qtmultimedia":
+            if args.toolchain == "msvc":
+                patch_msvc_multimedia(src)
             options += [f"-DFFMPEG_DIR={sdk.as_posix()}", "-DQT_DEPLOY_FFMPEG=ON", "-DFEATURE_ffmpeg=ON",
                         "-DFEATURE_spatialaudio=OFF",
                         # Clear these cached settings when upgrading an existing work directory.

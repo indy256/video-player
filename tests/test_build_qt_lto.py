@@ -82,5 +82,39 @@ class SourceTests(unittest.TestCase):
         self.assertFalse((self.work / "src").exists())
 
 
+class MsvcMultimediaPatchTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.src = Path(self.temp.name)
+        self.header = self.src / "src/multimedia/playback/qplaybackoptions.h"
+
+    def test_exports_destructor_and_preserves_other_declarations(self):
+        self.header.parent.mkdir(parents=True)
+        before = ("class QPlaybackOptionsPrivate;\n"
+                  "QT_DECLARE_QESDP_SPECIALIZATION_DTOR(QPlaybackOptionsPrivate)\n"
+                  "class QPlaybackOptions {};\n")
+        self.header.write_text(before)
+        builder.patch_msvc_multimedia(self.src)
+        expected = before.replace(
+            "QT_DECLARE_QESDP_SPECIALIZATION_DTOR(QPlaybackOptionsPrivate)",
+            "QT_DECLARE_QESDP_SPECIALIZATION_DTOR_WITH_EXPORT("
+            "QPlaybackOptionsPrivate, Q_MULTIMEDIA_EXPORT)")
+        self.assertEqual(self.header.read_text(), expected)
+        builder.patch_msvc_multimedia(self.src)
+        self.assertEqual(self.header.read_text(), expected)
+
+    def test_qt_without_playback_options(self):
+        builder.patch_msvc_multimedia(self.src)
+        self.assertEqual(list(self.src.iterdir()), [])
+
+    def test_unrecognized_declaration_fails_without_modifying_header(self):
+        self.header.parent.mkdir(parents=True)
+        self.header.write_text("unexpected upstream header\n")
+        with self.assertRaisesRegex(RuntimeError, "Unrecognized QPlaybackOptions"):
+            builder.patch_msvc_multimedia(self.src)
+        self.assertEqual(self.header.read_text(), "unexpected upstream header\n")
+
+
 if __name__ == "__main__":
     unittest.main()
