@@ -591,10 +591,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
                                       : "Keyframes unavailable; using precise seeking");
     });
     connect(timeline, &QSlider::sliderPressed, this, [this] { lastTimelinePosition = -1; });
-    connect(timeline, &QSlider::sliderReleased, this, [this] {
-        lastTimelinePosition = -1;
-        updateTimeline();
-    });
     commandsMenu->addSeparator();
     const QList<QAction *> tracks{
         command("nextAudio", "Next enabled audio track", {QKeySequence(Qt::Key_A)}, [this] { chooseTrack(true, true); }),
@@ -1106,13 +1102,24 @@ qint64 PlayerWindow::keyframePosition(qint64 position, bool forward) const {
     return qBound(qint64(0), position, player->duration());
 }
 
+bool PlayerWindow::atEnd() const {
+    return player->mediaStatus() == QMediaPlayer::EndOfMedia
+        || (player->duration() > 0 && player->position() >= player->duration());
+}
+
+void PlayerWindow::seekTo(qint64 position) {
+    const bool resume = atEnd() && position < player->duration();
+    externalAudio->seek(position);
+    if (resume) player->play();
+}
+
 void PlayerWindow::seekToSlider() {
     if (player->isSeekable()) {
         const qint64 position = keyframePosition(
             qRound64(timeline->value() * (double(player->duration()) / timelineSteps)));
-        if (!timeline->isSliderDown() || position != lastTimelinePosition) {
+        if (!timeline->isSliderDown() || position != lastTimelinePosition || atEnd()) {
             lastTimelinePosition = position;
-            externalAudio->seek(position);
+            seekTo(position);
         }
     }
     updateTimeline();
@@ -1122,7 +1129,7 @@ void PlayerWindow::skip(qint64 delta) {
     if (!timeline->isEnabled()) return;
     qint64 position = qBound(qint64(0), player->position() + delta, player->duration());
     if (position > 0 && position < player->duration()) position = keyframePosition(position, delta > 0);
-    externalAudio->seek(position);
+    seekTo(position);
     showNotification(QString("%1 %2 seconds — %3")
         .arg(delta < 0 ? "Backward" : "Forward").arg(qAbs(delta) / 1000).arg(timestamp(position)));
 }

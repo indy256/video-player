@@ -356,6 +356,9 @@ private slots:
         QCOMPARE(player->position(), player->duration());
         QVERIFY(activate("back30"));
         QCOMPARE(player->position(), qint64(0));
+        QTRY_VERIFY(player->isPlaying());
+        QVERIFY(activate("playPause"));
+        QTRY_COMPARE(player->playbackState(), QMediaPlayer::PausedState);
         auto *volume = window.findChild<QSlider *>("volume");
         volume->setValue(70);
         QVERIFY(activate("volumeUp"));
@@ -1204,6 +1207,65 @@ private slots:
         QTest::keyClick(&window, Qt::Key_Space);
         QTRY_VERIFY(player->isPlaying());
         QVERIFY(player->position() < 2000);
+    }
+    void seekBackFromEnd_data() {
+        QTest::addColumn<bool>("keyframes");
+        QTest::addColumn<bool>("arrow");
+        QTest::addColumn<bool>("naturalEnd");
+        for (bool keyframes : {false, true})
+            for (bool arrow : {false, true})
+                for (bool naturalEnd : {false, true})
+                    QTest::newRow(qPrintable(QString("%1-%2-%3")
+                        .arg(keyframes ? "keyframe" : "precise")
+                        .arg(arrow ? "arrow" : "timeline")
+                        .arg(naturalEnd ? "finished" : "seek-end"))) << keyframes << arrow << naturalEnd;
+    }
+    void seekBackFromEnd() {
+        QFETCH(bool, keyframes);
+        QFETCH(bool, arrow);
+        QFETCH(bool, naturalEnd);
+        QSettings().setValue("seeking/keyframes", keyframes);
+        PlayerWindow window;
+        window.show();
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *slider = window.findChild<SeekSlider *>("timeline");
+        QTRY_VERIFY(player->isPlaying() && slider->isEnabled());
+        if (keyframes) QTRY_VERIFY(window.findChild<KeyframeIndex *>()->isReady());
+        int timelineTarget = slider->maximum() / 2;
+        const auto seekBack = [&] {
+            if (arrow) window.findChild<QAction *>("back3")->trigger();
+            else {
+                slider->setSliderDown(true);
+                slider->setValue(timelineTarget);
+                slider->setSliderDown(false);
+            }
+        };
+        player->pause();
+        player->setPosition(6500);
+        seekBack();
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        if (naturalEnd) {
+            if (keyframes && !arrow) {
+                // Resume even when a held drag stays within the last keyframe interval.
+                slider->setSliderDown(true);
+                slider->setValue(qRound(slider->maximum() * 0.95));
+                timelineTarget = qRound(slider->maximum() * 0.9);
+            }
+            player->setPosition(7700);
+            player->play();
+            QTRY_COMPARE_WITH_TIMEOUT(player->mediaStatus(), QMediaPlayer::EndOfMedia, 5000);
+        } else {
+            window.findChild<QAction *>("forward30")->trigger();
+            QCOMPARE(player->position(), player->duration());
+        }
+        seekBack();
+        QTRY_VERIFY(player->isPlaying());
+        const qint64 target = arrow ? 5000 : (keyframes && naturalEnd ? 7000 : 4000);
+        QVERIFY(qAbs(player->position() - target) < 250);
+        const auto position = player->position();
+        QTRY_VERIFY(player->position() > position + 100);
+        QSettings().remove("seeking/keyframes");
     }
     void draggingMovesWindow() {
         PlayerWindow window;
