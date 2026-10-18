@@ -27,7 +27,7 @@ if ($Test) {
 $distDir = Join-Path $PSScriptRoot 'dist'
 New-Item -ItemType Directory -Path $distDir -Force | Out-Null
 Copy-Item -LiteralPath "$buildDir\VideoPlayer.exe" -Destination $distDir -Force
-& "$QtRoot\bin\windeployqt.exe" --release --compiler-runtime --force "$distDir\VideoPlayer.exe"
+& "$QtRoot\bin\windeployqt.exe" --release --compiler-runtime --qmldir "$PSScriptRoot/src/video" --force "$distDir\VideoPlayer.exe"
 if ($LASTEXITCODE -ne 0) { throw 'Deployment failed' }
 Write-Host "Player ready: $distDir\VideoPlayer.exe"
 if ($Portable) {

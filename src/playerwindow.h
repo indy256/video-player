@@ -6,7 +6,7 @@
 #include "subtitles.h"
 class QLabel;
 class QStackedWidget;
-class QVideoWidget;
+class VideoSurface;
 class QMenu;
 class QAction;
 class SeekSlider;
@@ -71,7 +71,7 @@ private:
     QMediaPlayer *player;
     ExternalAudio *externalAudio;
     EmbeddedSubtitles *embeddedSubtitles;
-    QVideoWidget *video;
+    VideoSurface *video;
     QStackedWidget *stage;
     FolderPanel *folderPanel;
     QLabel *statusLabel;

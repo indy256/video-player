@@ -20,7 +20,11 @@
 #include <QTest>
 #include <QVideoSink>
 #include <QVideoFrame>
-#include <QVideoWidget>
+#include "videosurface.h"
+#include <QQuickWidget>
+#include <QQuickItem>
+#include <QScopeGuard>
+#include <cmath>
 #include <QStackedWidget>
 #include <QAudioOutput>
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
@@ -220,7 +224,7 @@ private slots:
         window.show();
         for (QWidget *surface : {static_cast<QWidget *>(&window),
                 window.findChild<QWidget *>("emptyStage"),
-                static_cast<QWidget *>(window.findChild<QVideoWidget *>())}) {
+                static_cast<QWidget *>(window.findChild<VideoSurface *>())}) {
             QVERIFY(withPopupMenu(*surface, [&](QMenu &menu) {
                 QVERIFY(menu.findChild<QAction *>("update")->isEnabled());
                 QVERIFY(menu.findChild<QAction *>("registerFileTypes")->isEnabled());
@@ -278,7 +282,7 @@ private slots:
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
         auto *panel = window.findChild<FolderPanel *>();
         auto *files = window.findChild<QListWidget *>("folderFiles");
-        auto *video = window.findChild<QVideoWidget *>();
+        auto *video = window.findChild<VideoSurface *>();
         QVERIFY(panel->isHidden());
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && video->isVisible(), 10000);
         player->pause();
@@ -832,7 +836,7 @@ private slots:
         QVERIFY(selectSubtitle(window, -1));
         window.openFile(videoPath);
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
-        auto *sink = window.findChild<QVideoWidget *>()->videoSink();
+        auto *sink = window.findChild<VideoSurface *>()->videoSink();
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && sink->videoFrame().isValid(), 10000);
         QTRY_COMPARE(player->subtitleTracks().size(), 1);
         player->pause();
@@ -926,7 +930,7 @@ private slots:
         window.show();
         window.openFile(path);
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
-        auto *sink = window.findChild<QVideoWidget *>()->videoSink();
+        auto *sink = window.findChild<VideoSurface *>()->videoSink();
         QAudioBufferOutput buffers;
         player->setAudioBufferOutput(&buffers);
         QTRY_VERIFY_WITH_TIMEOUT(player->isSeekable() && player->subtitleTracks().size() >= 2, 15000);
@@ -987,7 +991,7 @@ private slots:
         window.show();
         window.openFile(folder.filePath(movies.first()));
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
-        auto *sink = window.findChild<QVideoWidget *>()->videoSink();
+        auto *sink = window.findChild<VideoSurface *>()->videoSink();
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && sink->videoFrame().isValid(), 20000);
         player->pause();
         player->setPosition(57000);
@@ -1045,7 +1049,7 @@ private slots:
         QVERIFY(!snapshot.isNull());
         QCOMPARE(snapshot.pixelColor(snapshot.width() / 2, snapshot.height() / 2), QColor(Qt::black));
         window.show();
-        auto *video = window.findChild<QVideoWidget *>();
+        auto *video = window.findChild<VideoSurface *>();
         QTRY_VERIFY_WITH_TIMEOUT(video->isVisible(), 10000);
         QVERIFY(video->videoSink()->videoFrame().isValid());
     }
@@ -1272,7 +1276,7 @@ private slots:
         window.show();
         window.openFile(clip);
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
-        auto *video = window.findChild<QVideoWidget *>();
+        auto *video = window.findChild<VideoSurface *>();
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && video->isVisible(), 10000);
         const QPoint origin = window.pos();
         const QPoint local(100, 100);
@@ -1298,7 +1302,7 @@ private slots:
         DiagnosticWindow window;
         window.show();
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
-        auto *video = window.findChild<QVideoWidget *>();
+        auto *video = window.findChild<VideoSurface *>();
         auto *app = static_cast<DiagnosticApplication *>(qApp);
         const auto measure = [&](const char *label, bool grow) {
             window.resize(grow ? QSize(700, 450) : QSize(1300, 750));
@@ -1356,7 +1360,8 @@ private slots:
         PlayerWindow window;
         window.show();
         window.activateWindow();
-        QTRY_VERIFY(window.isActiveWindow());
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QTest::qWait(0); // Process native focus delivery before sending shortcut keys.
         auto *volume = window.findChild<QSlider *>("volume");
         auto *audio = window.findChild<QAudioOutput *>();
         QTest::keyClick(&window, Qt::Key_Up);
@@ -1370,7 +1375,7 @@ private slots:
             QApplication::sendEvent(target, &event);
         };
         window.showFullScreen();
-        wheel(window.findChild<QVideoWidget *>(), 120);
+        wheel(window.findChild<VideoSurface *>(), 120);
         QCOMPARE(volume->value(), 75);
         wheel(volume, -120);
         QCOMPARE(volume->value(), 70);
@@ -1454,11 +1459,11 @@ private slots:
             auto *volume = window.findChild<QSlider *>("volume");
             auto *gamma = window.findChild<QSlider *>("gamma");
             auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
-            auto *video = window.findChild<QVideoWidget *>();
+            auto *video = window.findChild<VideoSurface *>();
             window.openFile(first);
             QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 23);
-            QVERIFY(player->videoSink() != video->videoSink());
+            QCOMPARE(player->videoSink() == video->videoSink(), video->usesGpuGamma());
             window.openFile(second);
             QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 10);
@@ -1476,7 +1481,7 @@ private slots:
         QCOMPARE(reopened.findChild<QSlider *>("volume")->value(), 85);
         QCOMPARE(QSettings().value(legacyVolume).toInt(), 12); // Old per-video values are neither read nor updated.
         QCOMPARE(reopened.findChild<QMediaPlayer *>("mediaPlayer")->videoSink(),
-            reopened.findChild<QVideoWidget *>()->videoSink());
+            reopened.findChild<VideoSurface *>()->videoSink());
         QSettings().remove("audio/volume");
     }
     void trackSelectionsPersist() {
@@ -1620,10 +1625,12 @@ private slots:
     }
     void gammaPlayback() {
         PlayerWindow window;
+        if (window.findChild<VideoSurface *>()->usesGpuGamma())
+            QSKIP("GPU rendering is checked by gpuGammaPlayback");
         window.show();
         window.openFile(clip);
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
-        auto *video = window.findChild<QVideoWidget *>();
+        auto *video = window.findChild<VideoSurface *>();
         auto *gamma = window.findChild<QSlider *>("gamma");
         auto *volume = window.findChild<QSlider *>("volume");
         QVERIFY(gamma);
@@ -1661,12 +1668,100 @@ private slots:
         QVERIFY(video->videoSink()->videoFrame().isValid());
         QVERIFY(!filterInput->videoFrame().isValid());
     }
+    void cpuGammaFallback() {
+        const QByteArray previous = qgetenv("VIDEO_PLAYER_CPU_GAMMA");
+        const auto restore = qScopeGuard([&] {
+            if (previous.isNull()) qunsetenv("VIDEO_PLAYER_CPU_GAMMA");
+            else qputenv("VIDEO_PLAYER_CPU_GAMMA", previous);
+        });
+        qputenv("VIDEO_PLAYER_CPU_GAMMA", "1");
+        VideoSurface video;
+        QMediaPlayer player;
+        video.setPlayer(&player);
+        QVERIFY(!video.usesGpuGamma());
+        QVideoFrame frame(QVideoFrameFormat(QSize(4, 4), QVideoFrameFormat::Format_RGBA8888));
+        QVERIFY(frame.map(QVideoFrame::WriteOnly));
+        std::fill(frame.bits(0), frame.bits(0) + frame.mappedBytes(0), uchar(64));
+        frame.unmap();
+        video.videoSink()->setVideoFrame(frame);
+        video.setGamma(20);
+        QVERIFY(player.videoSink() != video.videoSink());
+        QVERIFY(video.videoSink()->videoFrame().toImage() != frame.toImage());
+        video.setGamma(10);
+        QCOMPARE(player.videoSink(), video.videoSink());
+        QCOMPARE(video.videoSink()->videoFrame().toImage(), frame.toImage());
+    }
+    void gpuGammaPlayback() {
+        PlayerWindow window;
+        auto *video = window.findChild<VideoSurface *>();
+        if (!video->usesGpuGamma()) QSKIP("A GPU-backed desktop is required");
+        window.show();
+        const QString example = qEnvironmentVariable("VIDEO_PLAYER_GPU_GAMMA_EXAMPLE");
+        window.openFile(example.isEmpty() ? clip : example);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *gamma = window.findChild<QSlider *>("gamma");
+        QTRY_VERIFY(player->isPlaying() && video->isVisible());
+        player->pause();
+        gamma->setValue(10);
+        QTest::qWait(150);
+        QVERIFY(video->usesGpuGamma());
+        const QImage original = video->grabFrame();
+        QVERIFY(!original.isNull());
+        const qint64 position = player->position();
+        gamma->setValue(16);
+        QTest::qWait(150);
+        const QImage corrected = video->grabFrame();
+        QCOMPARE(corrected.size(), original.size());
+        QVERIFY(corrected != original);
+        double error = 0;
+        int samples = 0;
+        for (int y = original.height() / 4; y < original.height() * 3 / 4; y += 7)
+            for (int x = original.width() / 4; x < original.width() * 3 / 4; x += 7) {
+                const QColor before = original.pixelColor(x, y), after = corrected.pixelColor(x, y);
+                for (auto channel : {&QColor::red, &QColor::green, &QColor::blue}) {
+                    error += qAbs((after.*channel)()
+                        - qRound(255 * std::pow((before.*channel)() / 255.0, 1 / 1.6)));
+                    ++samples;
+                }
+            }
+        QVERIFY2(error / samples < 3, "GPU gamma must match the existing SDR gamma formula");
+        QCOMPARE(player->position(), position);
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QCOMPARE(player->videoSink(), video->videoSink());
+        gamma->setValue(10);
+        QTRY_COMPARE(video->grabFrame(), original);
+        player->setPosition(1000);
+        QTRY_VERIFY(qAbs(video->videoSink()->videoFrame().startTime() / 1000 - 1000) < 100);
+        QTest::keyClick(&window, Qt::Key_F);
+        QTRY_VERIFY(window.isFullScreen());
+        const QSize size = video->videoSink()->videoSize();
+        QTRY_VERIFY(qAbs(double(video->contentRect().width()) / video->contentRect().height()
+            - double(size.width()) / size.height()) < 0.01);
+        QTest::keyClick(&window, Qt::Key_F);
+        QTRY_VERIFY(!window.isFullScreen());
+        // Events on the embedded renderer must reach the player's existing controls.
+        auto *renderer = video->findChild<QQuickWidget *>();
+        QVERIFY(renderer);
+        QTest::mouseClick(renderer, Qt::LeftButton);
+        QTRY_VERIFY(player->isPlaying());
+        gamma->setValue(16);
+        QTRY_VERIFY(player->position() > 1300);
+        QVERIFY(video->usesGpuGamma());
+        const qint64 beforeFallback = player->position();
+        QVERIFY(QMetaObject::invokeMethod(renderer->rootObject(), "shaderError"));
+        QTRY_VERIFY(!video->usesGpuGamma());
+        QVERIFY(player->isPlaying());
+        QVERIFY(player->position() >= beforeFallback);
+        QVERIFY(player->videoSink() != video->videoSink());
+        QTRY_VERIFY(video->videoSink()->videoFrame().isValid());
+        gamma->setValue(10);
+    }
     void fullscreenControlsAtBottom() {
         PlayerWindow window;
         window.openFile(clip);
         window.showFullScreen();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        auto *video = window.findChild<QVideoWidget *>();
+        auto *video = window.findChild<VideoSurface *>();
         QTRY_VERIFY_WITH_TIMEOUT(video->isVisible(), 10000);
         auto *panel = window.findChild<QWidget *>("controlsPanel");
         auto *volume = window.findChild<QSlider *>("volume");
@@ -1720,7 +1815,7 @@ private slots:
         window.openFile(clip);
         window.showFullScreen();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        auto *video = window.findChild<QVideoWidget *>();
+        auto *video = window.findChild<VideoSurface *>();
         QTRY_VERIFY_WITH_TIMEOUT(video->isVisible(), 10000);
         QCursor::setPos(window.mapToGlobal(window.rect().center()));
         QTRY_VERIFY(!button->isVisible());
@@ -1757,7 +1852,7 @@ private slots:
         window.show();
         window.openFile(clip);
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
-        auto *video = window.findChild<QVideoWidget *>();
+        auto *video = window.findChild<VideoSurface *>();
         auto *slider = window.findChild<SeekSlider *>("timeline");
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && video->isVisible(), 10000);
         const QRect windowedGeometry = window.geometry();
@@ -1768,6 +1863,8 @@ private slots:
         QTRY_COMPARE(player->playbackState(), QMediaPlayer::PausedState);
         // Native double-click sequence: first click, double-click press, release.
         const auto doubleClick = [&] {
+            // Keep a short fixture from ending during native fullscreen transitions.
+            if (player->isPlaying()) player->setPosition(0);
             QSignalSpy states(player, &QMediaPlayer::playbackStateChanged);
             QTest::mouseClick(video, Qt::LeftButton);
             QTest::qWait(qMin(50, QApplication::doubleClickInterval() / 2));

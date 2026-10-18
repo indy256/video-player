@@ -12,7 +12,7 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
@@ -172,6 +172,20 @@ jobs:
 
       - name: Test playback, seeking, settings, and single-instance handoff
         run: ctest --test-dir build -C Release --output-on-failure --timeout 120
+
+      - name: Test GPU gamma on the desktop backend
+        shell: python {0}
+        run: |
+          import os, pathlib, subprocess, sys
+          executable = 'build/player_tests.exe' if os.name == 'nt' else 'build/player_tests'
+          platform = 'windows' if os.name == 'nt' else 'cocoa' if sys.platform == 'darwin' else 'xcb'
+          command = [executable, 'gpuGammaPlayback', '-platform', platform, '-o', 'build/gpu-gamma-tests.txt,txt']
+          if sys.platform.startswith('linux'):
+              command = ['xvfb-run', '-a'] + command
+              os.environ['QSG_RHI_BACKEND'] = 'opengl'
+          result = subprocess.run(command, timeout=60)
+          print(pathlib.Path('build/gpu-gamma-tests.txt').read_text())
+          sys.exit(result.returncode)
 
       - name: Package Windows application and runtime
         if: runner.os == 'Windows'

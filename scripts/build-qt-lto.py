@@ -209,7 +209,8 @@ def main():
         if module == "qtmultimedia":
             options += [f"-DFFMPEG_DIR={sdk.as_posix()}", "-DQT_DEPLOY_FFMPEG=ON", "-DFEATURE_ffmpeg=ON",
                         "-DFEATURE_spatialaudio=OFF",
-                        "-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Qml=ON", "-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Quick=ON"]
+                        # Clear these cached settings when upgrading an existing work directory.
+                        "-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Qml=OFF", "-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Quick=OFF"]
         run("cmake", "-S", src, "-B", build, *options)
         cache = (build / "CMakeCache.txt").read_text()
         if not re.search(r"^CMAKE_INTERPROCEDURAL_OPTIMIZATION:[^=]+=(ON|TRUE|1)$", cache, re.M):

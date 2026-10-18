@@ -2,7 +2,6 @@
 #include "seekslider.h"
 #include "keyframeindex.h"
 #include "updater.h"
-#include "gammafilter.h"
 #include "externalaudio.h"
 #include "embeddedsubtitles.h"
 #include "fileassociations.h"
@@ -38,7 +37,7 @@
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QStackedWidget>
-#include <QVideoWidget>
+#include "videosurface.h"
 #include <QVideoSink>
 #include <QVideoFrame>
 #include <QPalette>
@@ -379,13 +378,12 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     emptyLayout->addWidget(emptyOpen, 0, Qt::AlignHCenter);
     emptyLayout->addStretch();
     stage->addWidget(empty);
-    video = new QVideoWidget;
+    video = new VideoSurface;
     clickTimer = new QTimer(this);
     clickTimer->setSingleShot(true);
     clickTimer->setTimerType(Qt::PreciseTimer);
     connect(clickTimer, &QTimer::timeout, this, &PlayerWindow::togglePlayback);
     video->installEventFilter(this);
-    video->setAspectRatioMode(Qt::KeepAspectRatio);
     stage->addWidget(video);
     auto *loading = new QWidget;
     loading->installEventFilter(this);
@@ -405,14 +403,13 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     overlayTimer->setInterval(50);
     connect(overlayTimer, &QTimer::timeout, this, &PlayerWindow::updateOverlays);
     connect(notificationTimer, &QTimer::timeout, this, &PlayerWindow::updateOverlays);
-    connect(video->videoSink(), &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
+    connect(video, &VideoSurface::videoFrameChanged, this, [this](const QVideoFrame &frame) {
         if (frame.isValid() && !frameReady) {
             frameReady = true;
             updateFullscreen();
         }
     });
-    auto *gammaFilter = new GammaFilter(video->videoSink(), this);
-    player->setVideoOutput(video);
+    video->setPlayer(player);
     embeddedSubtitles = new EmbeddedSubtitles(player, this);
     connect(embeddedSubtitles, &EmbeddedSubtitles::textChanged, this, &PlayerWindow::updateSubtitles);
     connect(embeddedSubtitles, &EmbeddedSubtitles::failed, this, [this](const QString &message) {
@@ -481,12 +478,12 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     filesButton->setAccessibleName("Show/hide folder files");
     controls->addWidget(filesButton, 0, 3, Qt::AlignVCenter);
     connect(filesButton, &QPushButton::toggled, folderPanel, &QWidget::setVisible);
-    connect(gamma, &QSlider::valueChanged, this, [gammaFilter, gammaLabel, this](int value) {
+    connect(gamma, &QSlider::valueChanged, this, [gammaLabel, this](int value) {
         const QString text = QString("Gamma %1").arg(value / 10.0, 0, 'f', 1);
         gammaLabel->setText(text);
         gamma->setToolTip(text + " (double-click to reset)");
         saveVideoSettings();
-        gammaFilter->apply(player, value);
+        video->setGamma(value);
         updateSubtitles();
         if (!restoringVideoSettings) showNotification(text);
     });
@@ -781,12 +778,8 @@ void PlayerWindow::updateSubtitleOverlay() {
         subtitleOverlay->hide();
         return;
     }
-    QSize pictureSize = video->videoSink()->videoSize();
-    if (pictureSize.isEmpty()) pictureSize = video->size();
-    pictureSize.scale(video->size(), Qt::KeepAspectRatio);
-    QRect picture(QPoint(), pictureSize);
-    picture.moveCenter(video->rect().center());
-    static_cast<SubtitleOverlay *>(subtitleOverlay)->layoutCaption(pictureSize);
+    const QRect picture = video->contentRect();
+    static_cast<SubtitleOverlay *>(subtitleOverlay)->layoutCaption(picture.size());
     subtitleOverlay->move(video->mapToGlobal(QPoint(
         picture.x() + (picture.width() - subtitleOverlay->width()) / 2,
         picture.bottom() + 1 - picture.height() / 20 - subtitleOverlay->height())));

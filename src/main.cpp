@@ -11,6 +11,8 @@
 #include <QVideoSink>
 #include <QVideoFrame>
 #include <QTimer>
+#include <QQmlComponent>
+#include <QQmlEngine>
 
 int main(int argc, char *argv[]) {
     // Use the installed FFmpeg shared libraries through Qt Multimedia's backend.
@@ -24,6 +26,13 @@ int main(int argc, char *argv[]) {
     // window, changing saved settings, or forwarding to an already running player.
     if (app.arguments().value(1) == "--runtime-check") {
         if (app.arguments().size() != 3 || !QFileInfo::exists(app.arguments().at(2))) return 2;
+        // Catch missing QML imports in portable deployments, even without a GPU.
+        QQmlEngine engine;
+        QQmlComponent surface(&engine, QUrl("qrc:/player/video/Video.qml"));
+        if (!surface.isReady()) {
+            qCritical() << surface.errors();
+            return 5;
+        }
         QMediaPlayer player;
         QVideoSink sink;
         player.setVideoSink(&sink);

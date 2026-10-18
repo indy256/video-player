@@ -1,0 +1,2 @@
+qt_add_executable(gpu_gamma_prototype main.cpp)
+target_link_libraries(gpu_gamma_prototype PRIVATE player_ui)
