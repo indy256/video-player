@@ -2,6 +2,7 @@
 #include <QMainWindow>
 #include <QMediaPlayer>
 #include <QVariant>
+#include <optional>
 #include "subtitles.h"
 class QLabel;
 class QStackedWidget;
@@ -96,7 +97,8 @@ private:
     bool updating = false;
     QString fileKey;
     bool restoringVideoSettings = false;
-    qint64 pendingPosition = -1;
+    // Empty after restoring; a negative position requests the midpoint.
+    std::optional<qint64> pendingPosition;
     QVariant pendingAudioSelection;
     QVariant pendingSubtitleSelection;
     SubtitleTrack externalSubtitles;

@@ -809,7 +809,7 @@ void PlayerWindow::openFile(const QString &path) {
     externalAudio->clear();
     excludedAudioTracks.clear();
     excludedSubtitles.clear();
-    pendingPosition = -1;
+    pendingPosition.reset();
     clickTimer->stop();
     timeline->setSliderDown(false);
     player->stop();
@@ -820,7 +820,7 @@ void PlayerWindow::openFile(const QString &path) {
     fileKey = QString::fromLatin1(QCryptographicHash::hash(
         identity.toUtf8(), QCryptographicHash::Sha256).toHex());
     QSettings settings;
-    pendingPosition = settings.value("positions/" + fileKey, 0).toLongLong();
+    pendingPosition = settings.value("positions/" + fileKey, -1).toLongLong();
     settings.beginGroup("videos/" + fileKey);
     excludedAudioTracks = settings.value("excludedAudioTracks").toList();
     excludedSubtitles = settings.value("excludedSubtitles").toList();
@@ -856,7 +856,7 @@ void PlayerWindow::saveVideoSettings() {
 }
 
 void PlayerWindow::savePosition() {
-    if (fileKey.isEmpty() || pendingPosition >= 0 || !player->isSeekable()
+    if (fileKey.isEmpty() || pendingPosition || !player->isSeekable()
         || player->duration() <= 0 || player->error() != QMediaPlayer::NoError) return;
     QSettings settings;
     settings.setValue("positions/" + fileKey, player->mediaStatus() == QMediaPlayer::EndOfMedia
@@ -865,13 +865,13 @@ void PlayerWindow::savePosition() {
 }
 
 void PlayerWindow::restorePosition() {
-    if (pendingPosition < 0 || !player->isSeekable() || player->duration() <= 0
+    if (!pendingPosition || !player->isSeekable() || player->duration() <= 0
         || player->mediaStatus() == QMediaPlayer::LoadingMedia
         || player->mediaStatus() == QMediaPlayer::NoMedia
         || player->error() != QMediaPlayer::NoError) return;
-    const qint64 position = pendingPosition < player->duration() ? pendingPosition : 0;
-    pendingPosition = -1;
-    externalAudio->seek(position);
+    const qint64 position = *pendingPosition < 0 ? player->duration() / 2 : *pendingPosition;
+    pendingPosition.reset();
+    externalAudio->seek(position < player->duration() ? position : 0);
 }
 
 void PlayerWindow::closeEvent(QCloseEvent *event) {

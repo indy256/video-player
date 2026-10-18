@@ -1797,6 +1797,44 @@ private slots:
         window.showNormal();
         QTRY_COMPARE(window.geometry(), windowedGeometry);
     }
+    void initialPlaybackPosition_data() {
+        QTest::addColumn<qint64>("saved");
+        QTest::addColumn<qint64>("expected");
+        QTest::newRow("new-video") << qint64(-1) << qint64(4000);
+        QTest::newRow("saved-zero") << qint64(0) << qint64(0);
+        QTest::newRow("saved-position") << qint64(2500) << qint64(2500);
+        QTest::newRow("saved-end") << qint64(8000) << qint64(0);
+        QTest::newRow("saved-beyond-end") << qint64(12000) << qint64(0);
+    }
+    void initialPlaybackPosition() {
+        QFETCH(qint64, saved);
+        QFETCH(qint64, expected);
+        const QString path = temp.filePath(QString("initial-%1.mp4").arg(saved));
+        QVERIFY(QFile::copy(clip, path));
+        QString identity = QFileInfo(path).canonicalFilePath();
+#ifdef Q_OS_WIN
+        identity = identity.toCaseFolded();
+#endif
+        const QString key = "positions/" + QString::fromLatin1(QCryptographicHash::hash(
+            identity.toUtf8(), QCryptographicHash::Sha256).toHex());
+        if (saved >= 0) QSettings().setValue(key, saved);
+        {
+            PlayerWindow window;
+            window.openFile(path);
+            auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+            QTRY_VERIFY(player->isPlaying() && player->position() >= expected
+                && player->videoSink()->videoFrame().startTime() / 1000 >= expected);
+            QVERIFY(player->position() < expected + 500);
+            player->pause();
+            player->setPosition(1250);
+            window.close();
+        }
+        PlayerWindow reopened;
+        reopened.openFile(path);
+        auto *player = reopened.findChild<QMediaPlayer *>("mediaPlayer");
+        QTRY_VERIFY(player->isPlaying() && player->position() >= 1250);
+        QVERIFY(player->position() < 1750);
+    }
     void positionSurvivesClosing() {
         {
             PlayerWindow window;
