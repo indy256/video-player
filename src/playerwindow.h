@@ -16,6 +16,7 @@ class QAbstractButton;
 class ExternalAudio;
 class EmbeddedSubtitles;
 class FolderPanel;
+class KeyframeIndex;
 
 class PlayerWindow : public QMainWindow {
     Q_OBJECT
@@ -53,6 +54,7 @@ private:
     void togglePlayback();
     void updateControls();
     void updateTimeline();
+    qint64 keyframePosition(qint64 position, bool forward = false) const;
     void seekToSlider();
     void skip(qint64 delta);
     void adjustVolume(int steps);
@@ -72,6 +74,9 @@ private:
     QLabel *statusLabel;
     QLabel *timeLabel;
     SeekSlider *timeline;
+    KeyframeIndex *keyframes;
+    QAction *keyframeSeeking;
+    qint64 lastTimelinePosition = -1;
     QTimer *clickTimer;
     QSlider *volume;
     QSlider *gamma = nullptr;

@@ -1,5 +1,6 @@
 #include "playerwindow.h"
 #include "seekslider.h"
+#include "keyframeindex.h"
 #include "updater.h"
 #include "gammafilter.h"
 #include "externalaudio.h"
@@ -573,6 +574,27 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         command("back30", "Back 30 seconds", {QKeySequence(Qt::SHIFT | Qt::Key_Left)}, [this] { skip(-30000); }),
         command("forward30", "Forward 30 seconds", {QKeySequence(Qt::SHIFT | Qt::Key_Right)}, [this] { skip(30000); })
     };
+    keyframes = new KeyframeIndex(this);
+    keyframeSeeking = commandsMenu->addAction("Keyframe seeking");
+    keyframeSeeking->setObjectName("keyframeSeeking");
+    keyframeSeeking->setCheckable(true);
+    keyframeSeeking->setChecked(QSettings().value("seeking/keyframes", false).toBool());
+    connect(keyframeSeeking, &QAction::toggled, this, [this](bool enabled) {
+        QSettings().setValue("seeking/keyframes", enabled);
+        lastTimelinePosition = -1;
+        if (enabled) keyframes->load();
+        showNotification(enabled ? "Keyframe seeking on" : "Precise seeking on");
+    });
+    connect(keyframes, &KeyframeIndex::finished, this, [this](bool available) {
+        if (keyframeSeeking->isChecked())
+            showNotification(available ? "Keyframe seeking ready"
+                                      : "Keyframes unavailable; using precise seeking");
+    });
+    connect(timeline, &QSlider::sliderPressed, this, [this] { lastTimelinePosition = -1; });
+    connect(timeline, &QSlider::sliderReleased, this, [this] {
+        lastTimelinePosition = -1;
+        updateTimeline();
+    });
     commandsMenu->addSeparator();
     const QList<QAction *> tracks{
         command("nextAudio", "Next enabled audio track", {QKeySequence(Qt::Key_A)}, [this] { chooseTrack(true, true); }),
@@ -814,7 +836,11 @@ void PlayerWindow::openFile(const QString &path) {
     frameReady = false;
     stage->setCurrentIndex(2);
     setWindowTitle(file.fileName() + QStringLiteral(" - Video Player v" VIDEO_PLAYER_VERSION));
-    player->setSource(QUrl::fromLocalFile(file.absoluteFilePath()));
+    const auto source = QUrl::fromLocalFile(file.absoluteFilePath());
+    lastTimelinePosition = -1;
+    keyframes->setSource(source);
+    if (keyframeSeeking->isChecked()) keyframes->load();
+    player->setSource(source);
     pendingAudioSelection = settings.value("audioTrack");
     pendingSubtitleSelection = settings.value("subtitleTrack");
     restoreTrackSelections();
@@ -1075,14 +1101,27 @@ void PlayerWindow::updateTimeline() {
     }
 }
 
+qint64 PlayerWindow::keyframePosition(qint64 position, bool forward) const {
+    if (keyframeSeeking->isChecked()) position = keyframes->seekPosition(position, forward);
+    return qBound(qint64(0), position, player->duration());
+}
+
 void PlayerWindow::seekToSlider() {
-    if (player->isSeekable()) externalAudio->seek(qRound64(timeline->value() * (double(player->duration()) / timelineSteps)));
+    if (player->isSeekable()) {
+        const qint64 position = keyframePosition(
+            qRound64(timeline->value() * (double(player->duration()) / timelineSteps)));
+        if (!timeline->isSliderDown() || position != lastTimelinePosition) {
+            lastTimelinePosition = position;
+            externalAudio->seek(position);
+        }
+    }
     updateTimeline();
 }
 
 void PlayerWindow::skip(qint64 delta) {
     if (!timeline->isEnabled()) return;
-    const qint64 position = qBound(qint64(0), player->position() + delta, player->duration());
+    qint64 position = qBound(qint64(0), player->position() + delta, player->duration());
+    if (position > 0 && position < player->duration()) position = keyframePosition(position, delta > 0);
     externalAudio->seek(position);
     showNotification(QString("%1 %2 seconds — %3")
         .arg(delta < 0 ? "Backward" : "Forward").arg(qAbs(delta) / 1000).arg(timestamp(position)));

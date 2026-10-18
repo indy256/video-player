@@ -8,7 +8,7 @@ Windows portable builds register the launcher executable. On Linux, registration
 
 Right-click for playback, seeking, audio and subtitle selection and cycling, volume steps, gamma reset, fullscreen, and **Update to latest version**. Keyboard shortcuts appear beside their commands. Updating downloads the matching asset from the latest GitHub release, verifies its size and SHA-256 checksum, replaces the app, and restarts with the current video at its saved position. Downloads can be canceled before installation. The application folder must be writable. Windows updates the portable launcher (or replaces a standalone local build with the portable release); Linux requires the AppImage; macOS requires the installed `VideoPlayer.app`. Diagnostic logs remain in a `.video-player-update-*` folder beside the app; macOS also retains the previous bundle there.
 
-Video decoding, demuxing, seeking, and audio synchronization use FFmpeg shared libraries through **Qt Multimedia's FFmpeg backend**. The app explicitly selects this backend; it does not launch the FFmpeg command-line program or directly call libavcodec. See [Qt's backend documentation](https://doc.qt.io/qt-6/qtmultimedia-index.html).
+Video decoding, demuxing, seeking, and audio synchronization use FFmpeg shared libraries through **Qt Multimedia's FFmpeg backend**. The app explicitly selects this backend and does not launch the FFmpeg command-line program. Optional keyframe indexing reads compressed packet timestamps through the bundled FFmpeg 7 libraries. See [Qt's backend documentation](https://doc.qt.io/qt-6/qtmultimedia-index.html).
 
 ## Build and run on this machine
 
@@ -70,6 +70,8 @@ The gamma slider adjusts video midtones from 0.1 to 4.0: values above 1.0 lighte
 
 Playback position is saved per file when you close the app (including Escape) or open another video. Reopening that file resumes from the saved position. Finished videos restart from the beginning. Positions are stored in the current user's Qt settings.
 
+Enable **Keyframe seeking** in the right-click menu to snap timeline clicks and drags to the preceding video keyframe. Movements within the same keyframe interval during a drag avoid repeated seeks, and release keeps the selected keyframe without an additional precise seek. Play/pause state is preserved. This global preference is remembered across restarts; Left/Right and Shift+Left/Right also use keyframes: backward skips snap to the preceding keyframe and forward skips snap to the following keyframe around the requested 3- or 30-second target. Start/end boundaries, forward targets beyond the last keyframe, and saved playback positions retain precise seeking. The first use for each opened file scans compressed packets in the background, which can take time for large files. Precise seeking remains available while indexing or if indexing fails. Indexing uses Qt's bundled FFmpeg 7 runtime; other runtime versions fall back to precise seeking. Building downloads checksum-verified FFmpeg public headers through CMake; no additional runtime executable is required.
+
 Press `S` (Shift+S) to choose an embedded subtitle track or any `.srt` file beside the current video, or choose Off. Embedded captions use a separate subtitle reader synchronized to playback, so changing them keeps the audio and video streams running. External subtitles support UTF-8 and BOM-marked UTF-16, multiline cues, and overlapping cues. They follow playback and seeking and can be changed while paused. Audio and subtitle selections (including external files and subtitles Off) are remembered separately for each video and restored when it is reopened. If a saved track or external file is unavailable, the player keeps its default selection.
 
 In either track popup, click a checkbox (or press Space on the highlighted item) to include or skip that item when cycling. Click its name or press Enter to select it; the current track is bold. Lowercase `a` and `s` cycle through checked audio and subtitle items in menu order, wrapping at the end. Every item, including subtitles Off, starts checked for a new video. Checkbox choices are saved per video and restored when it is reopened, including after restarting the app. With no items checked, cycling leaves playback unchanged.
@@ -85,6 +87,7 @@ In either track popup, click a checkbox (or press Space on the highlighted item)
 | Double-click video | Toggle fullscreen without briefly pausing or resuming playback |
 | Click and drag video or empty background | Move the window in normal windowed mode without changing playback |
 | Timeline | Click or drag to seek immediately; playback continues from the latest selected position |
+| Right-click → Keyframe seeking | Toggle faster timeline and arrow seeking through keyframes; remembered across restarts |
 | Left / Right | Skip backward / forward 3 seconds |
 | Shift+Left / Shift+Right | Skip backward / forward 30 seconds |
 | Volume slider | Adjust audio; set to zero to silence |

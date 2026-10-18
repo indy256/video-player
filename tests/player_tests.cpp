@@ -1,5 +1,6 @@
 #include "playerwindow.h"
 #include "seekslider.h"
+#include "keyframeindex.h"
 #include "gammafilter.h"
 #include "externalaudio.h"
 #include "embeddedsubtitles.h"
@@ -1044,6 +1045,123 @@ private slots:
         auto *video = window.findChild<QVideoWidget *>();
         QTRY_VERIFY_WITH_TIMEOUT(video->isVisible(), 10000);
         QVERIFY(video->videoSink()->videoFrame().isValid());
+    }
+    void keyframeTimelineSeeking() {
+        QSettings().remove("seeking/keyframes");
+        {
+            PlayerWindow window;
+            window.show();
+            auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+            auto *slider = window.findChild<SeekSlider *>("timeline");
+            auto *mode = window.findChild<QAction *>("keyframeSeeking");
+            auto *index = window.findChild<KeyframeIndex *>();
+            QVERIFY(!mode->isChecked());
+            window.openFile(clip);
+            QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && slider->isEnabled(), 10000);
+            player->pause();
+            QTRY_COMPARE(player->playbackState(), QMediaPlayer::PausedState);
+            QSignalSpy indexed(index, &KeyframeIndex::finished);
+            mode->trigger();
+            QTRY_COMPARE_WITH_TIMEOUT(indexed.count(), 1, 10000);
+            QVERIFY(index->isReady());
+            QCOMPARE(index->seekPosition(2350), qint64(2000));
+            QCOMPARE(index->seekPosition(0), qint64(0));
+            QCOMPARE(index->seekPosition(8000), qint64(7000));
+            slider->setSliderDown(true);
+            const auto setTime = [&](int milliseconds) {
+                slider->setValue(qRound(milliseconds * double(slider->maximum()) / player->duration()));
+            };
+            setTime(2350);
+            QCOMPARE(player->position(), qint64(2000));
+            QTRY_VERIFY(qAbs(player->videoSink()->videoFrame().startTime() / 1000 - 2000) < 80);
+            QSignalSpy positions(player, &QMediaPlayer::positionChanged);
+            setTime(2700);
+            QVERIFY(positions.isEmpty());
+            setTime(3650);
+            QCOMPARE(player->position(), qint64(3000));
+            slider->setSliderDown(false);
+            QCOMPARE(player->position(), qint64(3000));
+            QVERIFY(qAbs(slider->value() * double(player->duration()) / slider->maximum() - 3000) < 10);
+            QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+            mode->trigger();
+            setTime(2350);
+            QVERIFY(qAbs(player->position() - 2350) < 10);
+            mode->trigger();
+            player->play();
+            slider->setSliderDown(true);
+            setTime(4350);
+            QVERIFY(player->isPlaying());
+            const auto start = player->position();
+            QTRY_VERIFY(player->position() > start + 100);
+            const auto beforeRelease = player->position();
+            setTime(4700); // Same keyframe: playback should keep advancing.
+            QVERIFY(player->position() >= beforeRelease);
+            slider->setSliderDown(false);
+        }
+        {
+            PlayerWindow reopened;
+            QVERIFY(reopened.findChild<QAction *>("keyframeSeeking")->isChecked());
+        }
+        QSettings().remove("seeking/keyframes");
+    }
+    void keyframeArrowSeeking() {
+        QSettings().remove("seeking/keyframes");
+        PlayerWindow window;
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *mode = window.findChild<QAction *>("keyframeSeeking");
+        auto *index = window.findChild<KeyframeIndex *>();
+        QTRY_VERIFY(player->isPlaying() && window.findChild<SeekSlider *>("timeline")->isEnabled());
+        player->pause();
+        mode->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(index->isReady(), 10000);
+        player->setPosition(2350);
+        QTest::keyClick(&window, Qt::Key_Right);
+        QCOMPARE(player->position(), qint64(6000));
+        QTRY_VERIFY(qAbs(player->videoSink()->videoFrame().startTime() / 1000 - 6000) < 80);
+        player->setPosition(5350);
+        QTest::keyClick(&window, Qt::Key_Left);
+        QCOMPARE(player->position(), qint64(2000));
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QTest::keyClick(&window, Qt::Key_Left, Qt::ShiftModifier);
+        QCOMPARE(player->position(), qint64(0));
+        QTest::keyClick(&window, Qt::Key_Right, Qt::ShiftModifier);
+        QCOMPARE(player->position(), player->duration());
+        // The tail after the last keyframe still allows forward progress.
+        player->setPosition(4500);
+        QTest::keyClick(&window, Qt::Key_Right);
+        QCOMPARE(player->position(), qint64(7500));
+        mode->trigger();
+        player->setPosition(2350);
+        QTest::keyClick(&window, Qt::Key_Right);
+        QCOMPARE(player->position(), qint64(5350));
+        mode->trigger();
+        player->setPosition(1000);
+        player->play();
+        QTest::keyClick(&window, Qt::Key_Right);
+        QVERIFY(player->isPlaying());
+        QVERIFY(player->position() >= 4000);
+        mode->trigger();
+        QSettings().remove("seeking/keyframes");
+    }
+    void keyframeIndexSourceChanges() {
+        KeyframeIndex index;
+        QSignalSpy finished(&index, &KeyframeIndex::finished);
+        index.setSource(QUrl::fromLocalFile(clip));
+        index.load();
+        index.setSource(QUrl::fromLocalFile(temp.filePath("missing.mp4")));
+        QVERIFY(!index.isReady());
+        QCOMPARE(index.seekPosition(2350), qint64(2350));
+        index.load();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 10000);
+        QVERIFY(!finished.first().first().toBool());
+        index.setSource(QUrl::fromLocalFile(clip));
+        index.load();
+        QTRY_VERIFY_WITH_TIMEOUT(index.isReady(), 10000);
+        QCOMPARE(index.seekPosition(2350), qint64(2000));
     }
     void playbackAndSeeking() {
         PlayerWindow window;
