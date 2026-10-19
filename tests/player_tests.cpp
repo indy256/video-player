@@ -1732,11 +1732,17 @@ private slots:
         QTRY_COMPARE(video->grabFrame(), original);
         player->setPosition(1000);
         QTRY_VERIFY(qAbs(video->videoSink()->videoFrame().startTime() / 1000 - 1000) < 100);
+        // Window shortcuts require an active top-level window. Xvfb has no
+        // window manager to activate it automatically after show().
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
         QTest::keyClick(&window, Qt::Key_F);
         QTRY_VERIFY(window.isFullScreen());
         const QSize size = video->videoSink()->videoSize();
         QTRY_VERIFY(qAbs(double(video->contentRect().width()) / video->contentRect().height()
             - double(size.width()) / size.height()) < 0.01);
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
         QTest::keyClick(&window, Qt::Key_F);
         QTRY_VERIFY(!window.isFullScreen());
         // Events on the embedded renderer must reach the player's existing controls.
