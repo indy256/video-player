@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import io
+import os
 from pathlib import Path
 import subprocess
 import tarfile
@@ -80,6 +81,51 @@ class SourceTests(unittest.TestCase):
                 self.source()
             run.assert_not_called()
         self.assertFalse((self.work / "src").exists())
+
+
+class BuildEnvironmentTests(unittest.TestCase):
+    def test_seed_paths_cannot_override_build_tree_libraries_or_tools(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            seed, install = root / "seed", root / "lto"
+            other = root / "seed-other"
+            environment = {
+                "PATH": os.pathsep.join(map(str, [seed / "bin", other / "bin"])),
+                "LD_LIBRARY_PATH": os.pathsep.join(map(str, [seed / "lib", other / "lib"])),
+                "DYLD_LIBRARY_PATH": str(seed / "lib"),
+                "DYLD_FRAMEWORK_PATH": str(seed / "lib"),
+                "PKG_CONFIG_PATH": os.pathsep.join(map(str, [seed / "lib/pkgconfig", other])),
+                "QML2_IMPORT_PATH": str(seed / "qml"),
+                "QML_IMPORT_PATH": str(seed / "qml"),
+                "QT_PLUGIN_PATH": str(seed / "plugins"),
+                "QT_QPA_PLATFORM_PLUGIN_PATH": str(seed / "plugins/platforms"),
+                "CMAKE_PREFIX_PATH": str(seed), "Qt6_DIR": str(seed / "lib/cmake/Qt6"),
+                "QTDIR": str(seed), "QT_ROOT_DIR": str(seed),
+                "CC": "custom-compiler",
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                builder.prepare_build_environment(seed, install)
+                self.assertEqual(dict(os.environ), {
+                    "PATH": os.pathsep.join(map(str, [install / "bin", other / "bin"])),
+                    "LD_LIBRARY_PATH": str(other / "lib"),
+                    "PKG_CONFIG_PATH": str(other), "CC": "custom-compiler",
+                })
+
+    def test_environment_without_seed_paths_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with patch.dict(os.environ, {"PATH": str(root / "tools")}, clear=True):
+                builder.prepare_build_environment(root / "seed", root / "lto")
+                self.assertEqual(dict(os.environ), {
+                    "PATH": os.pathsep.join(map(str, [root / "lto/bin", root / "tools"])),
+                })
+
+    def test_seed_only_path_does_not_leave_current_directory_search(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with patch.dict(os.environ, {"PATH": str(root / "seed/bin")}, clear=True):
+                builder.prepare_build_environment(root / "seed", root / "lto")
+                self.assertEqual(os.environ["PATH"], str(root / "lto/bin"))
 
 
 class MsvcMultimediaPatchTests(unittest.TestCase):

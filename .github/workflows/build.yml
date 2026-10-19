@@ -148,12 +148,22 @@ jobs:
         run: |
           import json, os, pathlib
           root = pathlib.Path('.qt-lto').resolve()
+          seed = pathlib.Path(os.environ['QT_ROOT_DIR']).resolve()
           manifest = json.loads((root / 'lto-build.json').read_text())
           assert all(item['lto'] for item in manifest['modules'].values())
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               for key in ('QT_ROOT_DIR', 'QTDIR', 'CMAKE_PREFIX_PATH'):
                   output.write(f'{key}={root.as_posix()}\n')
               output.write(f'QT_PLUGIN_PATH={root.as_posix()}/plugins\n')
+              for key in ('QML_IMPORT_PATH', 'QML2_IMPORT_PATH'):
+                  output.write(f'{key}={root.as_posix()}/qml\n')
+              # The install action's seed libraries must not override the new
+              # kit's RUNPATH during application builds and playback tests.
+              for key in ('LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH', 'DYLD_FRAMEWORK_PATH', 'PKG_CONFIG_PATH'):
+                  if key in os.environ:
+                      paths = [p for p in os.environ[key].split(os.pathsep)
+                               if p and not pathlib.Path(p).resolve().is_relative_to(seed)]
+                      output.write(f'{key}={os.pathsep.join(paths)}\n')
           with open(os.environ['GITHUB_PATH'], 'a') as output:
               output.write(str(root / 'bin') + '\n')
 

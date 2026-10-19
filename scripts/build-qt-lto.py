@@ -159,6 +159,26 @@ def patch_msvc_multimedia(src):
         header.write_text(content.replace(original, exported))
 
 
+def prepare_build_environment(seed, install):
+    # install-qt-action also exports runtime/import search paths. In particular,
+    # LD_LIBRARY_PATH overrides build-tree RUNPATH, so qmlcachegen can load the
+    # seed's QtQml instead of the QtQml it was built against and crash.
+    for name in ("CMAKE_PREFIX_PATH", "Qt6_DIR", "QTDIR", "QT_ROOT_DIR", "QT_PLUGIN_PATH",
+                 "QT_QPA_PLATFORM_PLUGIN_PATH", "QML_IMPORT_PATH", "QML2_IMPORT_PATH"):
+        os.environ.pop(name, None)
+    for name in ("PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+                 "PKG_CONFIG_PATH"):
+        if name in os.environ:
+            paths = [p for p in os.environ[name].split(os.pathsep)
+                     if p and not Path(p).resolve().is_relative_to(seed)]
+            if paths:
+                os.environ[name] = os.pathsep.join(paths)
+            else:
+                os.environ.pop(name)
+    os.environ["PATH"] = os.pathsep.join(
+        [str(install / "bin")] + ([os.environ["PATH"]] if os.environ.get("PATH") else []))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", choices=FFMPEG, default="6.11.2")
@@ -175,11 +195,7 @@ def main():
     (args.install / "lto-build.json").unlink(missing_ok=True)
     args.work.mkdir(parents=True, exist_ok=True)
     sdk = ffmpeg_sdk(args)
-    # Avoid picking up prebuilt Qt libraries or plugins while building modules.
-    for name in ("CMAKE_PREFIX_PATH", "Qt6_DIR", "QTDIR", "QT_ROOT_DIR", "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH"):
-        os.environ.pop(name, None)
-    os.environ["PATH"] = str(args.install / "bin") + os.pathsep + os.pathsep.join(
-        p for p in os.environ["PATH"].split(os.pathsep) if Path(p).resolve() != args.seed / "bin")
+    prepare_build_environment(args.seed, args.install)
     manifest = json.loads((SCRIPTS / "qt-source-hashes.json").read_text())[args.version]
     common = ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=ON",
               "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON", "-DFEATURE_optimize_size=ON",
