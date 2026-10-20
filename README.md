@@ -10,6 +10,11 @@ Right-click for playback, seeking, audio and subtitle selection and cycling, vol
 
 Video decoding, demuxing, seeking, and audio synchronization use FFmpeg shared libraries through **Qt Multimedia's FFmpeg backend**. The app explicitly selects this backend and does not launch the FFmpeg command-line program. Optional keyframe indexing reads compressed packet timestamps through the bundled FFmpeg 7 libraries. See [Qt's backend documentation](https://doc.qt.io/qt-6/qtmultimedia-index.html).
 
+GPU video uses an embedded `QQuickView`, avoiding `QQuickWidget`'s extra composition
+pass and allowing Qt's threaded render loop. Gamma, fullscreen overlays, mouse
+controls, keyboard shortcuts, and file drops use the same player controls. If GPU
+rendering fails, playback switches to the existing widget and CPU gamma fallback.
+
 ## Build and run on this machine
 
 Only one player runs per user. Opening another video through the executable sends its absolute path to the existing player and brings that window forward. Launching without a filename brings the existing player forward. The previous video's position is saved when switching files.

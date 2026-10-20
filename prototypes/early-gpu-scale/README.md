@@ -57,6 +57,9 @@ between 0 and 1920 across separate runs, keeping the same plugin and video.
 Two alternating pairs on Adreno X1-45, driver 31.0.137.0, native ARM64 Qt 6.11.2,
 and a 4K H.264 60 fps sample produced these medians:
 
+These measurements used the earlier `QQuickWidget` video surface. The
+`QQuickView` renderer needs a new comparison of scaled and original frames.
+
 | Measurement | Original frames | Early scale to 1920 |
 | --- | ---: | ---: |
 | First-frame delay | 0.67 s | 0.83 s |

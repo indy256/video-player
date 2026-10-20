@@ -1149,7 +1149,8 @@ bool PlayerWindow::frameReadyForPlayback(const QVideoFrame &frame) const {
     const qint64 duration = frame.endTime() > start ? frame.endTime() - start
         : qRound64(1000000 / (fps > 0 ? fps : 25));
     const qint64 target = *pendingPlayback->position * 1000;
-    return start <= target + duration && start + duration > target;
+    // Decoders can return the preceding frame when seeking exactly to its end.
+    return start <= target + duration && start + duration >= target;
 }
 
 void PlayerWindow::seekToSlider() {

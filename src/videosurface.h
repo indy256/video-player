@@ -3,7 +3,7 @@
 #include <QVideoFrame>
 class QMediaPlayer;
 class QVideoSink;
-class QQuickWidget;
+class QQuickView;
 class GammaFilter;
 
 // Keeps playback controls independent of the GPU surface and its CPU fallback.
@@ -12,6 +12,7 @@ class VideoSurface : public QWidget {
 public:
     explicit VideoSurface(QWidget *parent = nullptr);
     QVideoSink *videoSink() const { return sink; }
+    QQuickView *quickView() const { return quick; }
     bool usesGpuGamma() const { return quick != nullptr; }
     void setPlayer(QMediaPlayer *player);
     void setGamma(int tenths);
@@ -27,7 +28,8 @@ private:
     void watchSurface(QWidget *surface);
     QMediaPlayer *player = nullptr;
     QVideoSink *sink = nullptr;
-    QQuickWidget *quick = nullptr;
+    QQuickView *quick = nullptr;
+    QWidget *container = nullptr;
     GammaFilter *filter = nullptr;
     int gamma = 10;
 };

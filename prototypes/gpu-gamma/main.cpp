@@ -11,8 +11,7 @@
 #include <QLabel>
 #include <QMediaPlayer>
 #include <QPushButton>
-#include <QQuickWidget>
-#include <QQuickWindow>
+#include <QQuickView>
 #include <QSGRendererInterface>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -133,9 +132,9 @@ private:
         result.insert("mode", mode);
         result.insert("gamma", gammaSlider->value() / 10.0);
         result.insert("device_pixel_ratio", surface->devicePixelRatioF());
-        auto *quick = surface->findChild<QQuickWidget *>();
-        result.insert("graphics_api", surface->usesGpuGamma() && quick
-            ? quick->quickWindow()->rendererInterface()->graphicsApi() == QSGRendererInterface::Direct3D11
+        auto *quick = surface->quickView();
+        result.insert("graphics_api", quick
+            ? quick->rendererInterface()->graphicsApi() == QSGRendererInterface::Direct3D11
                 ? "d3d11" : "other"
             : "native-widget");
         const QByteArray json = QJsonDocument(result).toJson();

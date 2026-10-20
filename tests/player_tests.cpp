@@ -21,7 +21,10 @@
 #include <QVideoSink>
 #include <QVideoFrame>
 #include "videosurface.h"
-#include <QQuickWidget>
+#include <QQuickView>
+#include <QMutex>
+#include <atomic>
+#include <memory>
 #include <QQuickItem>
 #include <QScopeGuard>
 #include <cmath>
@@ -33,6 +36,9 @@
 #endif
 #include <QWheelEvent>
 #include <QContextMenuEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QCursor>
 #include <QMenu>
 #include <QKeySequence>
@@ -69,6 +75,13 @@ struct AudioSamples {
 
 static QString subtitleText(const PlayerWindow &window) {
     return window.findChild<QLabel *>("subtitleOverlay")->text();
+}
+
+static bool waitForVideoExposed(PlayerWindow &window) {
+    const auto *video = window.findChild<VideoSurface *>();
+    // A fullscreen native child can cover the entire QWidget window.
+    return video->quickView() ? QTest::qWaitForWindowExposed(video->quickView())
+                             : QTest::qWaitForWindowExposed(&window);
 }
 
 class DiagnosticApplication : public QApplication {
@@ -115,20 +128,25 @@ private:
     QTemporaryDir temp;
     QString clip;
     template <typename Callback>
-    bool withPopupMenu(QWidget &surface, Callback callback) {
+    bool withPopupMenu(QWidget &surface, Callback callback, QWindow *input = nullptr) {
         bool opened = false;
         QTimer timer;
-        timer.setSingleShot(true);
+        timer.setInterval(10);
         connect(&timer, &QTimer::timeout, &surface, [&] {
             auto *menu = surface.window()->findChild<QMenu *>("playerMenu");
             if (!menu || !menu->isVisible()) return;
+            timer.stop();
             opened = true;
             callback(*menu);
             menu->close();
         });
-        timer.start(0);
-        QContextMenuEvent event(QContextMenuEvent::Mouse, QPoint(10, 10), surface.mapToGlobal(QPoint(10, 10)));
-        QApplication::sendEvent(&surface, &event);
+        timer.start();
+        if (input) {
+            QTest::mouseClick(input, Qt::RightButton, Qt::NoModifier, QPoint(10, 10));
+        } else {
+            QContextMenuEvent event(QContextMenuEvent::Mouse, QPoint(10, 10), surface.mapToGlobal(QPoint(10, 10)));
+            QApplication::sendEvent(&surface, &event);
+        }
         return opened;
     }
     template <typename Callback>
@@ -1250,8 +1268,11 @@ private slots:
         QTRY_VERIFY(player->position() > positionWhileDragging);
         QTest::mouseMove(slider, QPoint(slider->width() / 4, slider->height() / 2));
         QTRY_VERIFY(qAbs(player->position() - 2000) < 250);
-        QTRY_VERIFY(player->videoSink()->videoFrame().startTime() / 1000 >= 2000
-            && player->videoSink()->videoFrame().startTime() / 1000 < 3000);
+        QTRY_VERIFY2(player->videoSink()->videoFrame().startTime() / 1000 >= 2000
+            && player->videoSink()->videoFrame().startTime() / 1000 < 3000,
+            qPrintable(QString("Position %1 ms, frame %2 ms, state %3, slider %4")
+                .arg(player->position()).arg(player->videoSink()->videoFrame().startTime() / 1000)
+                .arg(int(player->playbackState())).arg(slider->value())));
         const qint64 latestSeek = player->position();
         QTRY_VERIFY(player->position() > latestSeek + 150);
         const qint64 beforeRelease = player->position();
@@ -1267,14 +1288,18 @@ private slots:
     void seekWaitsForLatestFrame_data() {
         QTest::addColumn<bool>("playing");
         QTest::addColumn<int>("gammaValue");
+        QTest::addColumn<qint64>("target");
         for (bool playing : {false, true})
             for (int gammaValue : {10, 16})
-                QTest::newRow(qPrintable(QString("%1-gamma-%2").arg(playing ? "playing" : "paused").arg(gammaValue)))
-                    << playing << gammaValue;
+                for (qint64 target : {qint64(6000), qint64(1920)})
+                    QTest::newRow(qPrintable(QString("%1-gamma-%2-target-%3")
+                        .arg(playing ? "playing" : "paused").arg(gammaValue).arg(target)))
+                        << playing << gammaValue << target;
     }
     void seekWaitsForLatestFrame() {
         QFETCH(bool, playing);
         QFETCH(int, gammaValue);
+        QFETCH(qint64, target);
         QSettings().remove("seeking/keyframes");
         PlayerWindow window;
         window.show();
@@ -1291,8 +1316,8 @@ private slots:
         QVERIFY(staleFrame.map(QVideoFrame::WriteOnly));
         std::fill(staleFrame.bits(0), staleFrame.bits(0) + staleFrame.mappedBytes(0), uchar(0));
         staleFrame.unmap();
-        staleFrame.setStartTime(2000000);
-        staleFrame.setEndTime(2040000);
+        staleFrame.setStartTime(1000000);
+        staleFrame.setEndTime(1040000);
         qint64 resumedFrame = -1;
         QObject observer;
         connect(player, &QMediaPlayer::playbackStateChanged, &observer, [&](auto state) {
@@ -1300,16 +1325,16 @@ private slots:
                 resumedFrame = video->videoSink()->videoFrame().startTime() / 1000;
         });
         slider->setSliderDown(true);
-        slider->setValue(qRound(slider->maximum() * 0.25));
+        slider->setValue(qRound(slider->maximum() * 0.125));
         QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
         // Supersede that seek before its frame is delivered, then simulate a late old frame.
-        slider->setValue(qRound(slider->maximum() * 0.75));
+        slider->setValue(qRound(target * double(slider->maximum()) / player->duration()));
         video->videoSink()->setVideoFrame(staleFrame);
         slider->setSliderDown(false);
-        QTRY_VERIFY(qAbs(video->videoSink()->videoFrame().startTime() / 1000 - 6000) < 80);
+        QTRY_VERIFY(qAbs(video->videoSink()->videoFrame().startTime() / 1000 - target) < 80);
         if (playing) {
             QTRY_VERIFY(player->isPlaying());
-            QVERIFY(qAbs(resumedFrame - 6000) < 80);
+            QVERIFY(qAbs(resumedFrame - target) < 80);
             const qint64 position = player->position();
             QTRY_VERIFY(player->position() > position + 100);
         } else {
@@ -1865,26 +1890,37 @@ private slots:
         if (example.isEmpty()) QSKIP("Set VIDEO_PLAYER_STARTUP_EXAMPLE to a local video");
         PlayerWindow window;
         auto *video = window.findChild<VideoSurface *>();
-        auto *quick = video->findChild<QQuickWidget *>();
+        auto *quick = video->quickView();
         if (!quick) QSKIP("A GPU-backed desktop is required");
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
         QElapsedTimer clock;
         clock.start();
-        QJsonArray frames, renders, events, pulses;
+        QJsonArray frames, events, pulses;
+        struct RenderLog {
+            QMutex mutex;
+            QJsonArray renders;
+            double start = 0;
+            std::atomic<qint64> pts{-1};
+        };
+        // Direct render callbacks run on the scene graph thread. Keep their
+        // storage alive through disconnect and read frame timestamps atomically.
+        const auto renderLog = std::make_shared<RenderLog>();
         const auto now = [&] { return clock.nsecsElapsed() / 1e6; };
-        double renderStart = 0;
         QObject observer; // Disconnect before the report arrays are destroyed.
         connect(video, &VideoSurface::videoFrameChanged, &observer, [&](const QVideoFrame &frame) {
+            renderLog->pts = frame.startTime();
             if (frame.isValid()) frames.append(QJsonObject{{"ms", now()}, {"pts_ms", frame.startTime() / 1000.0},
                 {"width", frame.width()}, {"height", frame.height()},
                 {"texture", frame.handleType() == QVideoFrame::RhiTextureHandle}});
         });
-        connect(quick->quickWindow(), &QQuickWindow::beforeFrameBegin, &observer, [&] {
-            renderStart = now();
+        connect(quick, &QQuickWindow::beforeFrameBegin, &observer, [renderLog, clock] {
+            renderLog->start = clock.nsecsElapsed() / 1e6;
         }, Qt::DirectConnection);
-        connect(quick->quickWindow(), &QQuickWindow::afterFrameEnd, &observer, [&] {
-            renders.append(QJsonObject{{"ms", now()}, {"render_ms", now() - renderStart},
-                {"pts_ms", video->videoSink()->videoFrame().startTime() / 1000.0}});
+        connect(quick, &QQuickWindow::afterFrameEnd, &observer, [renderLog, clock] {
+            const double end = clock.nsecsElapsed() / 1e6;
+            QMutexLocker lock(&renderLog->mutex);
+            renderLog->renders.append(QJsonObject{{"ms", end}, {"render_ms", end - renderLog->start},
+                {"pts_ms", renderLog->pts.load() / 1000.0}});
         }, Qt::DirectConnection);
         connect(player, &QMediaPlayer::mediaStatusChanged, &observer, [&](auto status) {
             events.append(QJsonObject{{"ms", now()}, {"status", int(status)}, {"position", player->position()}});
@@ -1892,9 +1928,9 @@ private slots:
         connect(player, &QMediaPlayer::playbackStateChanged, &observer, [&](auto state) {
             events.append(QJsonObject{{"ms", now()}, {"state", int(state)}, {"position", player->position()}});
         });
-        connect(quick->quickWindow(), &QQuickWindow::sceneGraphInitialized, &observer, [&] {
+        connect(quick, &QQuickWindow::sceneGraphInitialized, &observer, [&] {
             events.append(QJsonObject{{"ms", now()}, {"event", "sceneGraphInitialized"}});
-        }, Qt::DirectConnection);
+        }, Qt::QueuedConnection);
         QTimer pulse;
         pulse.setTimerType(Qt::PreciseTimer);
         pulse.setInterval(10);
@@ -1925,6 +1961,11 @@ private slots:
         QTimer::singleShot(9000, &loop, &QEventLoop::quit);
         loop.exec();
         pulse.stop();
+        QJsonArray renders;
+        {
+            QMutexLocker lock(&renderLog->mutex);
+            renders = renderLog->renders;
+        }
         const QJsonObject report{{"frames", frames}, {"renders", renders}, {"events", events}, {"pulses_ms", pulses},
             {"surface_width", video->width()}, {"surface_height", video->height()},
             {"device_pixel_ratio", video->devicePixelRatioF()}};
@@ -1939,7 +1980,8 @@ private slots:
     void gpuGammaPlayback() {
         PlayerWindow window;
         auto *video = window.findChild<VideoSurface *>();
-        if (!video->usesGpuGamma()) QSKIP("A GPU-backed desktop is required");
+        auto *renderer = video->quickView();
+        if (!renderer) QSKIP("A GPU-backed desktop is required");
         window.show();
         const QString example = qEnvironmentVariable("VIDEO_PLAYER_GPU_GAMMA_EXAMPLE");
         window.openFile(example.isEmpty() ? clip : example);
@@ -1981,19 +2023,16 @@ private slots:
         // window manager to activate it automatically after show().
         window.activateWindow();
         QVERIFY(QTest::qWaitForWindowActive(&window));
-        QTest::keyClick(&window, Qt::Key_F);
+        QTest::keyClick(renderer, Qt::Key_F);
         QTRY_VERIFY(window.isFullScreen());
         const QSize size = video->videoSink()->videoSize();
         QTRY_VERIFY(qAbs(double(video->contentRect().width()) / video->contentRect().height()
             - double(size.width()) / size.height()) < 0.01);
         window.activateWindow();
         QVERIFY(QTest::qWaitForWindowActive(&window));
-        QTest::keyClick(&window, Qt::Key_F);
+        QTest::keyClick(renderer, Qt::Key_F);
         QTRY_VERIFY(!window.isFullScreen());
-        // Events on the embedded renderer must reach the player's existing controls.
-        auto *renderer = video->findChild<QQuickWidget *>();
-        QVERIFY(renderer);
-        QTest::mouseClick(renderer, Qt::LeftButton);
+        player->play();
         QTRY_VERIFY(player->isPlaying());
         gamma->setValue(16);
         QTRY_VERIFY(player->position() > 1300);
@@ -2007,11 +2046,65 @@ private slots:
         QTRY_VERIFY(video->videoSink()->videoFrame().isValid());
         gamma->setValue(10);
     }
+    void nativeVideoInput() {
+        const QPoint cursor = QCursor::pos();
+        const auto restoreCursor = qScopeGuard([&] { QCursor::setPos(cursor); });
+        PlayerWindow window;
+        auto *video = window.findChild<VideoSurface *>();
+        auto *view = video->quickView();
+        if (!view) QSKIP("A GPU-backed desktop is required");
+        window.openFile(clip);
+        window.show();
+        QVERIFY(waitForVideoExposed(window));
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        QTRY_VERIFY(player->isPlaying());
+        const auto menuOpens = [&] {
+            return withPopupMenu(*video, [&](QMenu &menu) {
+                QVERIFY(menu.findChild<QAction *>("playPause")->isEnabled());
+                QTest::keyClick(&menu, Qt::Key_Escape);
+            }, view);
+        };
+        QVERIFY(menuOpens());
+        QVERIFY(player->isPlaying());
+        QTest::keyClick(view, Qt::Key_Space);
+        QTRY_VERIFY(!player->isPlaying());
+        QTest::keyClick(view, Qt::Key_Space);
+        QTRY_VERIFY(player->isPlaying());
+        QTest::mouseClick(view, Qt::LeftButton);
+        QTRY_VERIFY(!player->isPlaying());
+        auto *volume = window.findChild<QSlider *>("volume");
+        volume->setValue(50);
+        QWheelEvent wheel(QPointF(10, 10), view->mapToGlobal(QPoint(10, 10)), {},
+            QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(view, &wheel);
+        QCOMPARE(volume->value(), 55);
+        QVERIFY(menuOpens());
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QTest::mouseDClick(view, Qt::LeftButton);
+        QTRY_VERIFY(window.isFullScreen());
+        QVERIFY(menuOpens());
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QTest::mouseDClick(view, Qt::LeftButton);
+        QTRY_VERIFY(!window.isFullScreen());
+
+        const QString dropped = temp.filePath("native-drop.mp4");
+        QVERIFY(QFile::copy(clip, dropped));
+        QMimeData mime;
+        mime.setUrls({QUrl::fromLocalFile(dropped)});
+        QDragEnterEvent enter(QPoint(10, 10), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(view, &enter);
+        QVERIFY(enter.isAccepted());
+        QDropEvent drop(QPointF(10, 10), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(view, &drop);
+        QVERIFY(drop.isAccepted());
+        QCOMPARE(player->source(), QUrl::fromLocalFile(dropped));
+        QTRY_VERIFY(player->isPlaying());
+    }
     void fullscreenControlsAtBottom() {
         PlayerWindow window;
         window.openFile(clip);
         window.showFullScreen();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QVERIFY(waitForVideoExposed(window));
         auto *video = window.findChild<VideoSurface *>();
         QTRY_VERIFY_WITH_TIMEOUT(video->isVisible(), 10000);
         auto *panel = window.findChild<QWidget *>("controlsPanel");
@@ -2065,7 +2158,7 @@ private slots:
         const QPoint savedCursor = QCursor::pos();
         window.openFile(clip);
         window.showFullScreen();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QVERIFY(waitForVideoExposed(window));
         auto *video = window.findChild<VideoSurface *>();
         QTRY_VERIFY_WITH_TIMEOUT(video->isVisible(), 10000);
         QCursor::setPos(window.mapToGlobal(window.rect().center()));
@@ -2098,9 +2191,12 @@ private slots:
         QCursor::setPos(savedCursor);
     }
     void mousePlaybackAndFullscreen() {
+        const QPoint cursor = QCursor::pos();
+        const auto restoreCursor = qScopeGuard([&] { QCursor::setPos(cursor); });
         PlayerWindow window;
         window.setGeometry(40, 50, 720, 480);
         window.show();
+        QCursor::setPos(window.mapToGlobal(window.rect().center()));
         window.openFile(clip);
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
         auto *video = window.findChild<VideoSurface *>();
