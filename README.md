@@ -68,9 +68,9 @@ Paused-only follow-up: set `VIDEO_PLAYER_RESIZE_PAUSED_ONLY=1` alongside the dia
 ## Startup diagnostic
 
 An optional Windows [early GPU downscaling backend](prototypes/early-gpu-scale/README.md)
-resizes decoded frames before Qt's texture copies. It is disabled in normal
-builds because local measurements show a tradeoff between smoother seek recovery
-and increased seek latency and CPU use.
+resizes decoded frames before Qt's texture copies. It is experimental and
+disabled in normal builds; its documentation records the tested configurations
+and their startup and seeking measurements.
 
 Opening a video prepares its first frame while paused, with the black video surface visible so GPU initialization can run alongside decoding. Playback and audio start once that frame is ready. This prevents the playback clock from running ahead during initialization and making the renderer catch up through overdue frames. A pause request during loading keeps the prepared frame paused.
 

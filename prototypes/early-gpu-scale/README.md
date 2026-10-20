@@ -7,9 +7,11 @@ the outgoing NV12 frame contains one quarter of the pixel data. Decoding still
 runs at the video's original resolution. The video file is unchanged.
 
 The D3D11 video processor writes into a reusable FFmpeg hardware-frame pool.
-GPU completion is signaled before publishing the frame, so playback does not
-restart while the first resize is still pending. Frame timestamps, color
-metadata, rotation and seeking continue through the regular Qt playback path.
+Resize commands are submitted asynchronously, without waiting on the CPU for
+each frame. Qt's existing texture bridge synchronizes access between the decoder
+and rendering devices. Playback can resume while a resize is still queued.
+Frame timestamps, color metadata, rotation and seeking continue through the
+regular Qt playback path.
 Unsupported formats, HDR, interlaced video and failed GPU operations use the
 original backend path. There is no CPU image conversion in the resize path.
 
@@ -57,8 +59,9 @@ between 0 and 1920 across separate runs, keeping the same plugin and video.
 Two alternating pairs on Adreno X1-45, driver 31.0.137.0, native ARM64 Qt 6.11.2,
 and a 4K H.264 60 fps sample produced these medians:
 
-These measurements used the earlier `QQuickWidget` video surface. The
-`QQuickView` renderer needs a new comparison of scaled and original frames.
+These measurements used the earlier `QQuickWidget` video surface and a per-frame
+GPU completion wait. The current `QQuickView` renderer and asynchronous scaler
+need a new comparison of scaled and original frames.
 
 | Measurement | Original frames | Early scale to 1920 |
 | --- | ---: | ---: |
@@ -72,3 +75,24 @@ adds latency and CPU overhead. Startup rendering varied, and settled playback
 can reach the source's 60 fps in either mode. Render updates count submitted
 frames rather than physical display refreshes. These results do not establish
 a general speed or power improvement, so the option remains experimental.
+
+### Removing the per-frame wait
+
+Two alternating pairs with `QQuickView` compared the old wait-enabled plugin
+against asynchronous submission, both scaling to 1920. These nine-second runs
+used the same hardware and source, gamma 1.0, an unobscured background window
+with a 1100x667 video surface, and a seek to 900123 ms after three seconds.
+
+| Median measurement | With GPU completion wait | Asynchronous |
+| --- | ---: | ---: |
+| First-frame delay | 0.65 s | 0.63 s |
+| Seek pause | 0.52 s | 0.40 s |
+| Render updates in the first second after seeking resumes | 46 | 34 |
+| Settled render updates/second | 59.2 | 57.5 |
+| CPU usage, normalized to one core | 31.3% | 31.0% |
+
+Removing the wait resumes playback sooner, while some GPU work remains queued.
+These short background-window measurements show a tradeoff in early seek
+presentation; they do not establish a general frame-rate or CPU improvement.
+All 24 native checks passed, including GPU scaling/readback, gamma, startup,
+seeking, and native input. The RGB mean absolute difference remained about 0.55.

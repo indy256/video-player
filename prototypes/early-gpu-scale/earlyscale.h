@@ -7,24 +7,20 @@ class EarlyGpuScaler {
     ComPtr<ID3D11VideoContext> videoContext;
     ComPtr<ID3D11VideoProcessorEnumerator> enumerator;
     ComPtr<ID3D11VideoProcessor> processor;
-    ComPtr<IDXGIDevice2> gpu;
-    SharedTextureHandle completed{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
     AVBufferUPtr frames;
     QSize inputSize, outputSize;
 
-    bool initialize(const AVHWFramesContext *context, const QSize &input, const QSize &output) {
-        const auto *hw = getHwDeviceContext(context->device_ctx);
+    bool initialize(const AVHWFramesContext *context, const AVD3D11VADeviceContext *hw,
+                    const QSize &input, const QSize &output) {
         if (device.Get() == hw->device && inputSize == input && outputSize == output)
             return bool(frames);
         frames.reset();
         processor.Reset();
         enumerator.Reset();
         videoContext.Reset();
-        videoDevice.Reset();
         device = hw->device;
         inputSize = input;
         outputSize = output;
-        if (!completed || FAILED(device.As(&gpu))) return false;
         if (FAILED(device.As(&videoDevice)) || FAILED(hw->device_context->QueryInterface(IID_PPV_ARGS(&videoContext))))
             return false;
         D3D11_VIDEO_PROCESSOR_CONTENT_DESC desc{};
@@ -70,8 +66,8 @@ public:
         const auto *hw = getHwDeviceContext(context->device_ctx);
         hw->lock(hw->lock_ctx);
         QScopeGuard unlock([&] { hw->unlock(hw->lock_ctx); });
-        if (!initialize(context, {source->width, source->height}, output)) return {};
-        const auto failed = [&] {
+        if (!initialize(context, hw, {source->width, source->height}, output)) return {};
+        const auto failed = [this] {
             frames.reset();
             qWarning("Early GPU scaling failed; using original video frames");
             return AVFrameUPtr{};
@@ -99,11 +95,9 @@ public:
         stream.Enable = TRUE;
         stream.pInputSurface = input.Get();
         if (FAILED(videoContext->VideoProcessorBlt(processor.Get(), destination.Get(), 0, 1, &stream))) return failed();
-        // Publish a ready frame: otherwise the first render blocks on this work
-        // after the playback/audio clock has already resumed.
+        // Submit the resize without a CPU wait. Qt's texture bridge synchronizes
+        // GPU access when the renderer consumes the frame.
         hw->device_context->Flush();
-        if (FAILED(gpu->EnqueueSetEvent(completed.get())) || WaitForSingleObject(completed.get(), 2000) != WAIT_OBJECT_0)
-            return failed();
         return result;
     }
 };
