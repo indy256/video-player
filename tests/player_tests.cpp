@@ -450,7 +450,8 @@ private slots:
         connect(&buffers, &QAudioBufferOutput::audioBufferReceived, &buffers,
             [&](const QAudioBuffer &buffer) { samples.add(buffer); });
 #endif
-        QTRY_VERIFY(video->isSeekable());
+        // Seekability can precede startup preparation and its automatic resume.
+        QTRY_VERIFY(video->isSeekable() && video->isPlaying());
         video->pause();
         external->seek(2000);
         QSignalSpy trackChanges(video, &QMediaPlayer::activeTracksChanged);
