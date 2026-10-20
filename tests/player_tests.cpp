@@ -1815,6 +1815,51 @@ private slots:
         QCOMPARE(player.videoSink(), video.videoSink());
         QCOMPARE(video.videoSink()->videoFrame().toImage(), frame.toImage());
     }
+    void gpuDownscalePlayback() {
+        const QString example = qEnvironmentVariable("VIDEO_PLAYER_GPU_SCALE_EXAMPLE");
+        if (example.isEmpty()) QSKIP("Set VIDEO_PLAYER_GPU_SCALE_EXAMPLE to a 4K SDR video");
+        const QByteArray previous = qgetenv("VIDEO_PLAYER_GPU_MAX_WIDTH");
+        const int cap = previous.toInt() > 0 ? previous.toInt() : 1920;
+        qputenv("VIDEO_PLAYER_GPU_MAX_WIDTH", QByteArray::number(cap));
+        const auto restore = qScopeGuard([&] {
+            if (previous.isNull()) qunsetenv("VIDEO_PLAYER_GPU_MAX_WIDTH");
+            else qputenv("VIDEO_PLAYER_GPU_MAX_WIDTH", previous);
+        });
+        PlayerWindow window;
+        auto *video = window.findChild<VideoSurface *>();
+        if (!video->usesGpuGamma()) QSKIP("A GPU-backed desktop is required");
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        window.openFile(example);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 15000);
+        player->pause();
+        player->setPosition(1234);
+        QTRY_VERIFY_WITH_TIMEOUT(video->videoSink()->videoFrame().width() == cap
+            && video->videoSink()->videoFrame().startTime() <= 1234000
+            && video->videoSink()->videoFrame().endTime() >= 1234000, 10000);
+        const QVideoFrame scaled = video->videoSink()->videoFrame();
+        const QImage image = scaled.toImage();
+        QCOMPARE(image.size(), scaled.size());
+        QVERIFY(!image.isNull());
+        qputenv("VIDEO_PLAYER_GPU_MAX_WIDTH", "0");
+        qint64 insideFrame = scaled.startTime() / 1000 + 1;
+        if (insideFrame == player->position()) ++insideFrame;
+        player->setPosition(insideFrame);
+        QTRY_VERIFY_WITH_TIMEOUT(video->videoSink()->videoFrame().width() > scaled.width(), 10000);
+        const QVideoFrame original = video->videoSink()->videoFrame();
+        QCOMPARE(original.startTime(), scaled.startTime());
+        const QImage reference = original.toImage().scaled(image.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        double error = 0;
+        int samples = 0;
+        for (int y = 0; y < image.height(); y += 3)
+            for (int x = 0; x < image.width(); x += 3) {
+                const QColor a = image.pixelColor(x, y), b = reference.pixelColor(x, y);
+                error += qAbs(a.red() - b.red()) + qAbs(a.green() - b.green()) + qAbs(a.blue() - b.blue());
+                samples += 3;
+            }
+        qInfo() << "GPU downscale RGB mean absolute error:" << error / samples;
+        QVERIFY2(error / samples < 4, "GPU downscale must preserve SDR colors and image detail");
+    }
     void startupDiagnostics() {
         const QString example = qEnvironmentVariable("VIDEO_PLAYER_STARTUP_EXAMPLE");
         if (example.isEmpty()) QSKIP("Set VIDEO_PLAYER_STARTUP_EXAMPLE to a local video");
@@ -1831,6 +1876,7 @@ private slots:
         QObject observer; // Disconnect before the report arrays are destroyed.
         connect(video, &VideoSurface::videoFrameChanged, &observer, [&](const QVideoFrame &frame) {
             if (frame.isValid()) frames.append(QJsonObject{{"ms", now()}, {"pts_ms", frame.startTime() / 1000.0},
+                {"width", frame.width()}, {"height", frame.height()},
                 {"texture", frame.handleType() == QVideoFrame::RhiTextureHandle}});
         });
         connect(quick->quickWindow(), &QQuickWindow::beforeFrameBegin, &observer, [&] {

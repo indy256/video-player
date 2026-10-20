@@ -67,6 +67,11 @@ if(APPLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/app-icon.icns")
     set_target_properties(VideoPlayer PROPERTIES MACOSX_BUNDLE_ICON_FILE app-icon.icns)
 endif()
 
+option(VIDEO_PLAYER_EARLY_GPU_SCALE "Build the experimental Windows GPU downscaling backend" OFF)
+if(VIDEO_PLAYER_EARLY_GPU_SCALE)
+    add_subdirectory(prototypes/early-gpu-scale)
+endif()
+
 option(VIDEO_PLAYER_DEPLOY "Install the application with its Qt and FFmpeg runtime" OFF)
 if(VIDEO_PLAYER_DEPLOY)
     include(GNUInstallDirs)
@@ -89,6 +94,11 @@ if(VIDEO_PLAYER_DEPLOY)
     endif()
     qt_generate_deploy_qml_app_script(TARGET VideoPlayer OUTPUT_SCRIPT deploy_script NO_TRANSLATIONS ${deploy_options})
     install(SCRIPT ${deploy_script})
+    if(VIDEO_PLAYER_EARLY_GPU_SCALE)
+        # Override the stock plugin after Qt's deployment step.
+        install(TARGETS early_scale_ffmpeg LIBRARY DESTINATION plugins/multimedia
+            RUNTIME DESTINATION plugins/multimedia)
+    endif()
 endif()
 include(CTest)
 option(VIDEO_PLAYER_GPU_GAMMA_PROTOTYPE "Build the GPU gamma experiment and benchmark" OFF)

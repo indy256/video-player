@@ -62,6 +62,11 @@ Paused-only follow-up: set `VIDEO_PLAYER_RESIZE_PAUSED_ONLY=1` alongside the dia
 
 ## Startup diagnostic
 
+An optional Windows [early GPU downscaling backend](prototypes/early-gpu-scale/README.md)
+resizes decoded frames before Qt's texture copies. It is disabled in normal
+builds because local measurements show a tradeoff between smoother seek recovery
+and increased seek latency and CPU use.
+
 Opening a video prepares its first frame while paused, with the black video surface visible so GPU initialization can run alongside decoding. Playback and audio start once that frame is ready. This prevents the playback clock from running ahead during initialization and making the renderer catch up through overdue frames. A pause request during loading keeps the prepared frame paused.
 
 Seeking uses the same preparation: the video and audio pause while the requested frame is decoded, then resume if playback was running before the seek. Further seeks replace the pending target, and pressing pause while waiting cancels the automatic resume. Seeking during an ordinary pause keeps the new frame paused. Audio-only files and seeks to the exact end do not wait for a video frame.

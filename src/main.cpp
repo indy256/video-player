@@ -13,6 +13,9 @@
 #include <QTimer>
 #include <QQmlComponent>
 #include <QQmlEngine>
+#ifdef VIDEO_PLAYER_EARLY_GPU_SCALE
+#include <QScreen>
+#endif
 
 int main(int argc, char *argv[]) {
     // Use the installed FFmpeg shared libraries through Qt Multimedia's backend.
@@ -22,6 +25,15 @@ int main(int argc, char *argv[]) {
     app.setApplicationVersion(QStringLiteral(VIDEO_PLAYER_VERSION));
     app.setWindowIcon(QIcon(":/assets/app-icon.png"));
     app.setOrganizationName("LocalApps");
+#ifdef VIDEO_PLAYER_EARLY_GPU_SCALE
+    QCoreApplication::addLibraryPath(QCoreApplication::applicationDirPath());
+    if (!qEnvironmentVariableIsSet("VIDEO_PLAYER_GPU_MAX_WIDTH")) {
+        int width = 0;
+        for (const auto *screen : app.screens())
+            width = qMax(width, qRound(screen->geometry().width() * screen->devicePixelRatio()));
+        qputenv("VIDEO_PLAYER_GPU_MAX_WIDTH", QByteArray::number(width));
+    }
+#endif
     // Exercise the deployed platform plugin and FFmpeg decoder without opening a
     // window, changing saved settings, or forwarding to an already running player.
     if (app.arguments().value(1) == "--runtime-check") {
