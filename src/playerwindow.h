@@ -18,6 +18,7 @@ class ExternalAudio;
 class EmbeddedSubtitles;
 class FolderPanel;
 class KeyframeIndex;
+class QVideoFrame;
 
 class PlayerWindow : public QMainWindow {
     Q_OBJECT
@@ -58,6 +59,8 @@ private:
     qint64 keyframePosition(qint64 position, bool forward = false) const;
     bool atEnd() const;
     void seekTo(qint64 position);
+    void cancelPendingPlayback();
+    bool frameReadyForPlayback(const QVideoFrame &frame) const;
     void seekToSlider();
     void skip(qint64 delta);
     void adjustVolume(int steps);
@@ -81,6 +84,7 @@ private:
     QAction *keyframeSeeking;
     qint64 lastTimelinePosition = -1;
     QTimer *clickTimer;
+    QTimer *resumeTimer;
     QSlider *volume;
     QSlider *gamma = nullptr;
     QWidget *controlsPanel;
@@ -93,7 +97,11 @@ private:
     bool draggingWindow = false;
     QPoint dragStartMouse;
     QPoint dragStartWindow;
-    bool frameReady = false;
+    struct PlaybackRequest {
+        bool play;
+        std::optional<qint64> position;
+    };
+    std::optional<PlaybackRequest> pendingPlayback;
     bool updating = false;
     QString fileKey;
     bool restoringVideoSettings = false;

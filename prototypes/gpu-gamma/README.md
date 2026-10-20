@@ -29,7 +29,9 @@ cmake --build build --target gpu_gamma_prototype --parallel 4
 
 The window has a timeline and gamma slider. Space toggles playback, F toggles
 fullscreen, and Escape closes it. Use `--mode cpu` for the original filter.
-Launching without a filename opens a file picker.
+Use `--fullscreen` with `--seconds` to measure at the display's full resolution.
+The benchmark runner also accepts `--fullscreen`. Launching without a filename
+opens a file picker.
 
 For a deployment beside its own DLLs and QML imports:
 

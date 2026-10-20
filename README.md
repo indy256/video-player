@@ -60,6 +60,22 @@ For comparison, run the same diagnostic with `QT_D3D_NO_FLIP=1`. This selects Qt
 
 Paused-only follow-up: set `VIDEO_PLAYER_RESIZE_PAUSED_ONLY=1` alongside the diagnostic flag. With zero new video frames and zero playback-position change, default presentation took 883–885 ms growing and 1385–1434 ms shrinking. Legacy presentation took 784–823 ms growing and 828–841 ms shrinking. Hiding the paused video reduced growth to 408–422 ms. This confirms the overhead persists when presenting a static frame; the legacy mode only partly helps enlargement.
 
+## Startup diagnostic
+
+Opening a video prepares its first frame while paused, with the black video surface visible so GPU initialization can run alongside decoding. Playback and audio start once that frame is ready. This prevents the playback clock from running ahead during initialization and making the renderer catch up through overdue frames. A pause request during loading keeps the prepared frame paused.
+
+Seeking uses the same preparation: the video and audio pause while the requested frame is decoded, then resume if playback was running before the seek. Further seeks replace the pending target, and pressing pause while waiting cancels the automatic resume. Seeking during an ordinary pause keeps the new frame paused. Audio-only files and seeks to the exact end do not wait for a video frame.
+
+The opt-in `startupDiagnostics` test records the first nine seconds without a warmup interval, using isolated settings and the regular player window. With the Qt DLL directory and test-only `ffmpeg` on PATH:
+
+```powershell
+$env:VIDEO_PLAYER_STARTUP_EXAMPLE = 'C:/Videos/4k60.mp4'
+$env:VIDEO_PLAYER_STARTUP_REPORT = 'C:/projects/video-player/build/startup.json'
+./build/player_tests.exe startupDiagnostics -platform windows
+```
+
+The JSON records frame arrivals and timestamps, Qt Quick render passes, media state changes, and UI timer callbacks from the file-open request. Set `VIDEO_PLAYER_STARTUP_ZERO=1` to start at zero instead of the normal midpoint, or `VIDEO_PLAYER_STARTUP_GAMMA=16` to test gamma 1.6. Set `VIDEO_PLAYER_SEEK_DIAGNOSTIC_MS=900000` to seek to 15 minutes three seconds after opening and record the recovery. Render passes measure submitted work rather than physical display refreshes; frame arrivals alone can count bursts that never appear individually on screen.
+
 ## Controls
 
 Press `A` (Shift+A) to select embedded audio or an audio file in the video's directory whose name starts with the video's name without its extension. For example, `movie.ENG.ac3` accompanies `movie.avi`. Matching is case-insensitive; supported extensions include AC3, EAC3, DTS, AAC, M4A, MKA, MP3, FLAC, WAV, OGG, and Opus (decoding depends on FFmpeg support). External audio follows playback, seeking, and volume. Selecting an embedded track switches back; opening another video clears the external selection. Audio files are assumed to start at the same time as the video.
@@ -86,7 +102,7 @@ In either track popup, click a checkbox (or press Space on the highlighted item)
 | Left-click video | After release, play or pause once the system double-click interval expires, only if no drag occurred |
 | Double-click video | Toggle fullscreen without briefly pausing or resuming playback |
 | Click and drag video or empty background | Move the window in normal windowed mode without changing playback |
-| Timeline | Click or drag to seek immediately; playback continues from the latest selected position |
+| Timeline | Click or drag to seek immediately; playback resumes when the requested frame is ready |
 | Right-click → Keyframe seeking | Toggle faster timeline and arrow seeking through keyframes; remembered across restarts |
 | Left / Right | Skip backward / forward 3 seconds |
 | Shift+Left / Shift+Right | Skip backward / forward 30 seconds |
@@ -99,6 +115,6 @@ In either track popup, click a checkbox (or press Space on the highlighted item)
 | Escape | Close the app |
 | Fullscreen top-right corner | Reveal the close cross; click to exit (hides when the pointer leaves) |
 
-During dragging, each movement seeks immediately and playback continues from the latest selected position. Releasing does not seek again or change play/pause state. Seeking is disabled for media that does not support it. Format support depends on the installed FFmpeg build. Errors appear in the video area. The whole video fits inside the window without cropping or stretching, with black bars when needed, including fullscreen. The bottom contains the seek, volume, and gamma sliders with time and gamma readouts.
+During dragging, each movement seeks immediately and playback resumes from the latest selected position once its frame is ready. Releasing does not seek again or change whether playback should resume. Seeking is disabled for media that does not support it. Format support depends on the installed FFmpeg build. Errors appear in the video area. The whole video fits inside the window without cropping or stretching, with black bars when needed, including fullscreen. The bottom contains the seek, volume, and gamma sliders with time and gamma readouts.
 
 To test GPU gamma on Windows, put the Qt DLL directory on PATH and run `build/player_tests.exe gpuGammaPlayback -platform windows`. Optionally set `VIDEO_PLAYER_GPU_GAMMA_EXAMPLE` to a local video at least four seconds long, for example a 4K H.264 clip. The test uses isolated settings and also checks recovery to the CPU renderer after a simulated shader failure.

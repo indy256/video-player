@@ -210,6 +210,7 @@ int main(int argc, char **argv) {
     parser.addOption({"gamma", "Initial gamma (0.1–4.0)", "gamma", "1.6"});
     parser.addOption({"seconds", "Benchmark duration after two seconds of warmup; 0 is interactive", "seconds", "0"});
     parser.addOption({"report", "Write JSON results to this file", "path"});
+    parser.addOption({"fullscreen", "Measure at the display's full resolution"});
     parser.process(app);
     bool validGamma, validSeconds;
     const double gamma = parser.value("gamma").toDouble(&validGamma);
@@ -223,7 +224,8 @@ int main(int argc, char **argv) {
         : parser.positionalArguments().first();
     if (path.isEmpty()) return 0;
     Prototype window(mode, qRound(gamma * 10), parser.value("report"));
-    window.show();
+    if (parser.isSet("fullscreen")) window.showFullScreen();
+    else window.show();
     window.open(path, seconds);
     return app.exec();
 }

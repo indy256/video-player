@@ -40,6 +40,10 @@
 #include <QDir>
 #include <QPainter>
 #include <QTimer>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QQuickWindow>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -1044,14 +1048,62 @@ private slots:
         PlayerWindow window;
         window.openFile(clip);
         auto *stage = window.findChild<QStackedWidget *>();
-        QCOMPARE(stage->currentWidget()->objectName(), QString("loadingStage"));
+        auto *video = window.findChild<VideoSurface *>();
+        QCOMPARE(stage->currentWidget(), video);
+        QVERIFY(!video->videoSink()->videoFrame().isValid());
         const QImage snapshot = stage->currentWidget()->grab().toImage();
         QVERIFY(!snapshot.isNull());
         QCOMPARE(snapshot.pixelColor(snapshot.width() / 2, snapshot.height() / 2), QColor(Qt::black));
         window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(video->isVisible() && video->videoSink()->videoFrame().isValid(), 10000);
+        // A subsequent open must initialize on black rather than showing a cached frame.
+        window.openFile(clip);
+        QVERIFY(!video->videoSink()->videoFrame().isValid());
+        QTRY_VERIFY_WITH_TIMEOUT(video->videoSink()->videoFrame().isValid(), 10000);
+    }
+    void startupWaitsForFirstFrame() {
+        PlayerWindow window;
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
         auto *video = window.findChild<VideoSurface *>();
-        QTRY_VERIFY_WITH_TIMEOUT(video->isVisible(), 10000);
-        QVERIFY(video->videoSink()->videoFrame().isValid());
+        bool prepared = false;
+        bool startedWithFrame = false;
+        connect(video, &VideoSurface::videoFrameChanged, &window, [&](const QVideoFrame &frame) {
+            if (frame.isValid()) prepared = true;
+        });
+        connect(player, &QMediaPlayer::playbackStateChanged, &window, [&](auto state) {
+            if (state == QMediaPlayer::PlayingState)
+                startedWithFrame = prepared && video->videoSink()->videoFrame().isValid();
+        });
+        window.openFile(clip);
+        QVERIFY(!player->isPlaying());
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+        QVERIFY(startedWithFrame);
+    }
+    void pauseDuringStartup() {
+        PlayerWindow window;
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *video = window.findChild<VideoSurface *>();
+        window.openFile(clip);
+        window.findChild<QAction *>("playPause")->trigger();
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(video->videoSink()->videoFrame().isValid(), 10000);
+        QTest::qWait(100);
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        window.findChild<QAction *>("playPause")->trigger();
+        QTRY_VERIFY(player->isPlaying());
+    }
+    void audioOnlyStartup() {
+        const QString audio = temp.filePath("startup-audio.m4a");
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", {"-v", "error", "-i", clip, "-vn", "-c:a", "copy", "-y", audio});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        PlayerWindow window;
+        window.openFile(audio);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && player->hasAudio(), 10000);
+        QVERIFY(!player->hasVideo());
     }
     void keyframeTimelineSeeking() {
         QSettings().remove("seeking/keyframes");
@@ -1097,7 +1149,7 @@ private slots:
             player->play();
             slider->setSliderDown(true);
             setTime(4350);
-            QVERIFY(player->isPlaying());
+            QTRY_VERIFY(player->isPlaying());
             const auto start = player->position();
             QTRY_VERIFY(player->position() > start + 100);
             const auto beforeRelease = player->position();
@@ -1149,7 +1201,7 @@ private slots:
         player->setPosition(1000);
         player->play();
         QTest::keyClick(&window, Qt::Key_Right);
-        QVERIFY(player->isPlaying());
+        QTRY_VERIFY(player->isPlaying());
         QVERIFY(player->position() >= 4000);
         mode->trigger();
         QSettings().remove("seeking/keyframes");
@@ -1192,7 +1244,7 @@ private slots:
         QTest::keyClick(&window, Qt::Key_Space);
         QTRY_VERIFY(player->isPlaying());
         QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, QPoint(slider->width() / 2, slider->height() / 2));
-        QCOMPARE(player->playbackState(), QMediaPlayer::PlayingState);
+        QTRY_COMPARE(player->playbackState(), QMediaPlayer::PlayingState);
         QVERIFY(qAbs(player->position() - 4000) < 250);
         const qint64 positionWhileDragging = player->position();
         QTRY_VERIFY(player->position() > positionWhileDragging);
@@ -1211,6 +1263,78 @@ private slots:
         QTest::keyClick(&window, Qt::Key_Space);
         QTRY_VERIFY(player->isPlaying());
         QVERIFY(player->position() < 2000);
+    }
+    void seekWaitsForLatestFrame_data() {
+        QTest::addColumn<bool>("playing");
+        QTest::addColumn<int>("gammaValue");
+        for (bool playing : {false, true})
+            for (int gammaValue : {10, 16})
+                QTest::newRow(qPrintable(QString("%1-gamma-%2").arg(playing ? "playing" : "paused").arg(gammaValue)))
+                    << playing << gammaValue;
+    }
+    void seekWaitsForLatestFrame() {
+        QFETCH(bool, playing);
+        QFETCH(int, gammaValue);
+        QSettings().remove("seeking/keyframes");
+        PlayerWindow window;
+        window.show();
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *video = window.findChild<VideoSurface *>();
+        auto *slider = window.findChild<SeekSlider *>("timeline");
+        QTRY_VERIFY(player->isPlaying() && video->videoSink()->videoFrame().isValid());
+        auto *gamma = window.findChild<QSlider *>("gamma");
+        const auto resetGamma = qScopeGuard([&] { gamma->setValue(10); });
+        gamma->setValue(gammaValue);
+        if (!playing) player->pause();
+        QVideoFrame staleFrame(QVideoFrameFormat(QSize(4, 4), QVideoFrameFormat::Format_RGBA8888));
+        QVERIFY(staleFrame.map(QVideoFrame::WriteOnly));
+        std::fill(staleFrame.bits(0), staleFrame.bits(0) + staleFrame.mappedBytes(0), uchar(0));
+        staleFrame.unmap();
+        staleFrame.setStartTime(2000000);
+        staleFrame.setEndTime(2040000);
+        qint64 resumedFrame = -1;
+        QObject observer;
+        connect(player, &QMediaPlayer::playbackStateChanged, &observer, [&](auto state) {
+            if (state == QMediaPlayer::PlayingState)
+                resumedFrame = video->videoSink()->videoFrame().startTime() / 1000;
+        });
+        slider->setSliderDown(true);
+        slider->setValue(qRound(slider->maximum() * 0.25));
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        // Supersede that seek before its frame is delivered, then simulate a late old frame.
+        slider->setValue(qRound(slider->maximum() * 0.75));
+        video->videoSink()->setVideoFrame(staleFrame);
+        slider->setSliderDown(false);
+        QTRY_VERIFY(qAbs(video->videoSink()->videoFrame().startTime() / 1000 - 6000) < 80);
+        if (playing) {
+            QTRY_VERIFY(player->isPlaying());
+            QVERIFY(qAbs(resumedFrame - 6000) < 80);
+            const qint64 position = player->position();
+            QTRY_VERIFY(player->position() > position + 100);
+        } else {
+            QTest::qWait(100);
+            QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+            QCOMPARE(resumedFrame, qint64(-1));
+        }
+    }
+    void pauseDuringSeek() {
+        QSettings().remove("seeking/keyframes");
+        PlayerWindow window;
+        window.show();
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *slider = window.findChild<SeekSlider *>("timeline");
+        auto *video = window.findChild<VideoSurface *>();
+        QTRY_VERIFY(player->isPlaying());
+        slider->setValue(qRound(slider->maximum() * 0.25));
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        window.findChild<QAction *>("playPause")->trigger();
+        QTRY_VERIFY(qAbs(video->videoSink()->videoFrame().startTime() / 1000 - 2000) < 80);
+        QTest::qWait(100);
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        window.findChild<QAction *>("playPause")->trigger();
+        QTRY_VERIFY(player->isPlaying());
     }
     void seekBackFromEnd_data() {
         QTest::addColumn<bool>("keyframes");
@@ -1690,6 +1814,81 @@ private slots:
         video.setGamma(10);
         QCOMPARE(player.videoSink(), video.videoSink());
         QCOMPARE(video.videoSink()->videoFrame().toImage(), frame.toImage());
+    }
+    void startupDiagnostics() {
+        const QString example = qEnvironmentVariable("VIDEO_PLAYER_STARTUP_EXAMPLE");
+        if (example.isEmpty()) QSKIP("Set VIDEO_PLAYER_STARTUP_EXAMPLE to a local video");
+        PlayerWindow window;
+        auto *video = window.findChild<VideoSurface *>();
+        auto *quick = video->findChild<QQuickWidget *>();
+        if (!quick) QSKIP("A GPU-backed desktop is required");
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        QElapsedTimer clock;
+        clock.start();
+        QJsonArray frames, renders, events, pulses;
+        const auto now = [&] { return clock.nsecsElapsed() / 1e6; };
+        double renderStart = 0;
+        QObject observer; // Disconnect before the report arrays are destroyed.
+        connect(video, &VideoSurface::videoFrameChanged, &observer, [&](const QVideoFrame &frame) {
+            if (frame.isValid()) frames.append(QJsonObject{{"ms", now()}, {"pts_ms", frame.startTime() / 1000.0},
+                {"texture", frame.handleType() == QVideoFrame::RhiTextureHandle}});
+        });
+        connect(quick->quickWindow(), &QQuickWindow::beforeFrameBegin, &observer, [&] {
+            renderStart = now();
+        }, Qt::DirectConnection);
+        connect(quick->quickWindow(), &QQuickWindow::afterFrameEnd, &observer, [&] {
+            renders.append(QJsonObject{{"ms", now()}, {"render_ms", now() - renderStart},
+                {"pts_ms", video->videoSink()->videoFrame().startTime() / 1000.0}});
+        }, Qt::DirectConnection);
+        connect(player, &QMediaPlayer::mediaStatusChanged, &observer, [&](auto status) {
+            events.append(QJsonObject{{"ms", now()}, {"status", int(status)}, {"position", player->position()}});
+        });
+        connect(player, &QMediaPlayer::playbackStateChanged, &observer, [&](auto state) {
+            events.append(QJsonObject{{"ms", now()}, {"state", int(state)}, {"position", player->position()}});
+        });
+        connect(quick->quickWindow(), &QQuickWindow::sceneGraphInitialized, &observer, [&] {
+            events.append(QJsonObject{{"ms", now()}, {"event", "sceneGraphInitialized"}});
+        }, Qt::DirectConnection);
+        QTimer pulse;
+        pulse.setTimerType(Qt::PreciseTimer);
+        pulse.setInterval(10);
+        connect(&pulse, &QTimer::timeout, &window, [&] { pulses.append(now()); });
+        pulse.start();
+        if (qEnvironmentVariableIntValue("VIDEO_PLAYER_STARTUP_ZERO")) {
+            QString identity = QFileInfo(example).canonicalFilePath();
+#ifdef Q_OS_WIN
+            identity = identity.toCaseFolded();
+#endif
+            const QString key = QString::fromLatin1(QCryptographicHash::hash(
+                identity.toUtf8(), QCryptographicHash::Sha256).toHex());
+            QSettings().setValue("positions/" + key, 0);
+        }
+        window.openFile(example);
+        if (qEnvironmentVariableIsSet("VIDEO_PLAYER_STARTUP_GAMMA"))
+            window.findChild<QSlider *>("gamma")->setValue(qEnvironmentVariableIntValue("VIDEO_PLAYER_STARTUP_GAMMA"));
+        window.show();
+        if (qEnvironmentVariableIsSet("VIDEO_PLAYER_SEEK_DIAGNOSTIC_MS")) {
+            const qint64 target = qEnvironmentVariable("VIDEO_PLAYER_SEEK_DIAGNOSTIC_MS").toLongLong();
+            QTimer::singleShot(3000, &observer, [&, target] {
+                events.append(QJsonObject{{"ms", now()}, {"event", "seekRequested"}, {"target_ms", target}});
+                auto *slider = window.findChild<SeekSlider *>("timeline");
+                slider->setValue(qRound(target * double(slider->maximum()) / player->duration()));
+            });
+        }
+        QEventLoop loop;
+        QTimer::singleShot(9000, &loop, &QEventLoop::quit);
+        loop.exec();
+        pulse.stop();
+        const QJsonObject report{{"frames", frames}, {"renders", renders}, {"events", events}, {"pulses_ms", pulses},
+            {"surface_width", video->width()}, {"surface_height", video->height()},
+            {"device_pixel_ratio", video->devicePixelRatioF()}};
+        const QString path = qEnvironmentVariable("VIDEO_PLAYER_STARTUP_REPORT");
+        QVERIFY(!frames.isEmpty());
+        if (!path.isEmpty()) {
+            QFile file(path);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QVERIFY(file.write(QJsonDocument(report).toJson()) > 0);
+        }
     }
     void gpuGammaPlayback() {
         PlayerWindow window;

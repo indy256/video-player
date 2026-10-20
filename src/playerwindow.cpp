@@ -385,12 +385,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(clickTimer, &QTimer::timeout, this, &PlayerWindow::togglePlayback);
     video->installEventFilter(this);
     stage->addWidget(video);
-    auto *loading = new QWidget;
-    loading->installEventFilter(this);
-    loading->setObjectName("loadingStage");
-    loading->setPalette(blackPalette);
-    loading->setAutoFillBackground(true);
-    stage->addWidget(loading);
     notification = new QLabel(this);
     configureOverlay(notification, "actionNotification");
     notification->setStyleSheet("QLabel { color: #759eff; background: transparent; "
@@ -403,11 +397,19 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     overlayTimer->setInterval(50);
     connect(overlayTimer, &QTimer::timeout, this, &PlayerWindow::updateOverlays);
     connect(notificationTimer, &QTimer::timeout, this, &PlayerWindow::updateOverlays);
-    connect(video, &VideoSurface::videoFrameChanged, this, [this](const QVideoFrame &frame) {
-        if (frame.isValid() && !frameReady) {
-            frameReady = true;
-            updateFullscreen();
-        }
+    resumeTimer = new QTimer(this);
+    resumeTimer->setSingleShot(true);
+    connect(resumeTimer, &QTimer::timeout, this, [this] {
+        if (!pendingPlayback) return;
+        if (player->hasVideo() && !frameReadyForPlayback(video->videoSink()->videoFrame())) return;
+        const bool play = pendingPlayback->play;
+        cancelPendingPlayback();
+        if (play) player->play();
+    });
+    connect(video, &VideoSurface::videoFrameChanged, this, [this] {
+        // Prepare the first frame before starting the audio/playback clock. Otherwise
+        // a slow initial decode or seek makes it race through overdue 4K frames.
+        if (pendingPlayback) resumeTimer->start();
     });
     video->setPlayer(player);
     embeddedSubtitles = new EmbeddedSubtitles(player, this);
@@ -533,6 +535,11 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(player, &QMediaPlayer::mediaStatusChanged, this, &PlayerWindow::updateControls);
     connect(player, &QMediaPlayer::mediaStatusChanged, this, &PlayerWindow::restorePosition);
     connect(player, &QMediaPlayer::mediaStatusChanged, this, &PlayerWindow::restoreTrackSelections);
+    connect(player, &QMediaPlayer::mediaStatusChanged, this, [this](auto status) {
+        // Audio-only files have no video frame to complete startup.
+        if (pendingPlayback && status == QMediaPlayer::LoadedMedia && !player->hasVideo())
+            resumeTimer->start();
+    });
     connect(player, &QMediaPlayer::tracksChanged, this, &PlayerWindow::restoreTrackSelections);
     connect(player, &QMediaPlayer::seekableChanged, this, &PlayerWindow::restorePosition);
     connect(player, &QMediaPlayer::durationChanged, this, &PlayerWindow::restorePosition);
@@ -631,9 +638,9 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     commandsMenu->addSeparator();
     command("exit", "Exit", {QKeySequence(Qt::Key_Escape)}, &PlayerWindow::close);
     connect(commandsMenu, &QMenu::aboutToShow, this, [this, play, fullscreen, seeking, tracks, update] {
-        setCommandLabel(play, player->isPlaying() ? "Pause" : "Play");
+        setCommandLabel(play, (pendingPlayback ? pendingPlayback->play : player->isPlaying()) ? "Pause" : "Play");
         setCommandLabel(fullscreen, isFullScreen() ? "Leave fullscreen" : "Fullscreen");
-        play->setEnabled(playbackReady());
+        play->setEnabled(pendingPlayback.has_value() || playbackReady());
         for (auto *action : seeking) action->setEnabled(timeline->isEnabled());
         for (auto *action : tracks) action->setEnabled(playbackReady());
         update->setEnabled(!updating);
@@ -804,8 +811,11 @@ void PlayerWindow::openFile(const QString &path) {
     excludedSubtitles.clear();
     pendingPosition.reset();
     clickTimer->stop();
+    cancelPendingPlayback();
     timeline->setSliderDown(false);
     player->stop();
+    player->videoSink()->setVideoFrame({});
+    video->videoSink()->setVideoFrame({});
     QString identity = file.canonicalFilePath();
 #ifdef Q_OS_WIN
     identity = identity.toCaseFolded();
@@ -822,8 +832,10 @@ void PlayerWindow::openFile(const QString &path) {
     gamma->setValue(settings.value("gamma", 10).toInt());
     restoringVideoSettings = false;
     saveVideoSettings();
-    frameReady = false;
-    stage->setCurrentIndex(2);
+    // Keep the black video surface visible so its GPU resources are initialized
+    // while the decoder prepares the first frame, including on subsequent opens.
+    stage->setCurrentWidget(video);
+    pendingPlayback = PlaybackRequest{true, std::nullopt};
     setWindowTitle(file.fileName() + QStringLiteral(" - Video Player v" VIDEO_PLAYER_VERSION));
     const auto source = QUrl::fromLocalFile(file.absoluteFilePath());
     lastTimelinePosition = -1;
@@ -835,7 +847,7 @@ void PlayerWindow::openFile(const QString &path) {
     restoreTrackSelections();
     folderPanel->setFile(file.absoluteFilePath());
     restorePosition();
-    player->play();
+    player->pause();
 }
 
 void PlayerWindow::saveVideoSettings() {
@@ -869,6 +881,7 @@ void PlayerWindow::restorePosition() {
 
 void PlayerWindow::closeEvent(QCloseEvent *event) {
     clickTimer->stop();
+    cancelPendingPlayback();
     controlsTimer->stop();
     notificationTimer->stop();
     overlayTimer->stop();
@@ -890,11 +903,15 @@ bool PlayerWindow::playbackReady() const {
 
 void PlayerWindow::togglePlayback() {
     clickTimer->stop();
+    if (pendingPlayback) {
+        pendingPlayback->play = !pendingPlayback->play;
+        return;
+    }
     if (!playbackReady()) return;
     if (player->isPlaying()) player->pause();
     else {
-        if (player->mediaStatus() == QMediaPlayer::EndOfMedia) externalAudio->seek(0);
-        player->play();
+        if (atEnd()) seekTo(0);
+        else player->play();
     }
 }
 
@@ -904,6 +921,7 @@ void PlayerWindow::updateControls() {
     const bool seekable = ready && player->isSeekable() && player->duration() > 0;
     timeline->setEnabled(seekable);
     if (player->error() != QMediaPlayer::NoError) {
+        cancelPendingPlayback();
         statusLabel->setText("Unable to play: " + player->errorString());
         stage->setCurrentIndex(isFullScreen() ? 1 : 0);
     } else if (status == QMediaPlayer::LoadingMedia) statusLabel->setText("Loading video...");
@@ -928,7 +946,7 @@ bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
         wheelEvent(static_cast<QWheelEvent *>(event));
         return true;
     }
-    const bool dragSurface = watched == video || watched == stage->widget(0) || watched == stage->widget(2);
+    const bool dragSurface = watched == video || watched == stage->widget(0);
     if (dragSurface && event->type() == QEvent::MouseMove && mousePressed) {
         const auto *mouse = static_cast<QMouseEvent *>(event);
         const QPoint delta = mouse->globalPosition().toPoint() - dragStartMouse;
@@ -1036,7 +1054,7 @@ void PlayerWindow::updateFullscreen() {
     layout->setContentsMargins(fullscreen ? QMargins() : QMargins(0, 0, 0, 12));
     layout->setSpacing(fullscreen ? 0 : 16);
     const bool showMedia = fullscreen || (!player->source().isEmpty() && player->error() == QMediaPlayer::NoError);
-    stage->setCurrentIndex(showMedia ? (frameReady ? 1 : 2) : 0);
+    stage->setCurrentIndex(showMedia ? 1 : 0);
 }
 
 void PlayerWindow::updateFullscreenControls() {
@@ -1102,8 +1120,36 @@ bool PlayerWindow::atEnd() const {
 
 void PlayerWindow::seekTo(qint64 position) {
     const bool resume = atEnd() && position < player->duration();
+    const bool playing = player->isPlaying() || (pendingPlayback && pendingPlayback->play) || resume;
+    if (position == player->position() && (!pendingPlayback || pendingPlayback->position == position)) return;
+    cancelPendingPlayback();
+    // There is no new video frame to wait for at the exact end or in audio-only media.
+    const bool prepare = player->hasVideo() && position < player->duration();
+    if (prepare) {
+        pendingPlayback = PlaybackRequest{playing, position};
+        player->pause();
+    }
     externalAudio->seek(position);
-    if (resume) player->play();
+    if (!prepare && playing) player->play();
+}
+
+void PlayerWindow::cancelPendingPlayback() {
+    resumeTimer->stop();
+    pendingPlayback.reset();
+}
+
+bool PlayerWindow::frameReadyForPlayback(const QVideoFrame &frame) const {
+    if (!frame.isValid() || (pendingPosition && player->isSeekable())) return false;
+    if (!pendingPlayback || !pendingPlayback->position) return true;
+    // Old frames can still arrive after another movement of the seek slider.
+    // Only the frame at the latest target may restart the playback clock.
+    const qint64 start = frame.startTime();
+    if (start < 0) return true;
+    const qreal fps = player->metaData().value(QMediaMetaData::VideoFrameRate).toDouble();
+    const qint64 duration = frame.endTime() > start ? frame.endTime() - start
+        : qRound64(1000000 / (fps > 0 ? fps : 25));
+    const qint64 target = *pendingPlayback->position * 1000;
+    return start <= target + duration && start + duration > target;
 }
 
 void PlayerWindow::seekToSlider() {

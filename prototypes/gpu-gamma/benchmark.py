@@ -14,6 +14,7 @@ def main():
     parser.add_argument("--qt-bin", type=Path, help="Qt runtime directory when not deployed")
     parser.add_argument("--seconds", type=float, default=6)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--fullscreen", action="store_true", help="Measure at the display's full resolution")
     parser.add_argument("--output", type=Path, default=Path("gamma-benchmark.json"))
     args = parser.parse_args()
     if args.seconds <= 0 or args.repeats < 1:
@@ -33,11 +34,14 @@ def main():
         for mode, gamma in configurations[::1 if repeat % 2 == 0 else -1]:
             name = f"{repeat + 1}-{mode}-{gamma}"
             report = logs / f"{name}.json"
-            run = subprocess.run([
+            command = [
                 str(args.executable.resolve()), str(args.video.resolve()),
                 "--mode", mode, "--gamma", gamma, "--seconds", str(args.seconds),
                 "--report", str(report),
-            ], env=env, capture_output=True, timeout=args.seconds + 30)
+            ]
+            if args.fullscreen:
+                command.append("--fullscreen")
+            run = subprocess.run(command, env=env, capture_output=True, timeout=args.seconds + 30)
             (logs / f"{name}.log").write_bytes(run.stderr)
             if run.returncode:
                 raise RuntimeError(f"{name} failed ({run.returncode}); see {logs / (name + '.log')}")
