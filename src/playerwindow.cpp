@@ -401,7 +401,13 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     resumeTimer->setSingleShot(true);
     connect(resumeTimer, &QTimer::timeout, this, [this] {
         if (!pendingPlayback) return;
-        if (player->hasVideo() && !frameReadyForPlayback(video->videoSink()->videoFrame())) return;
+        const auto frame = video->videoSink()->videoFrame();
+        if (player->hasVideo() && !frameReadyForPlayback(frame, resumeTimer->interval() > 0)) {
+            // MPEG seeking can land past the target. Retry once after a second,
+            // accepting the new valid frame instead of waiting indefinitely.
+            if (pendingPlayback->position && frame.isValid()) resumeTimer->start(1000);
+            return;
+        }
         const bool play = pendingPlayback->play;
         cancelPendingPlayback();
         if (play) player->play();
@@ -409,7 +415,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(video, &VideoSurface::videoFrameChanged, this, [this] {
         // Prepare the first frame before starting the audio/playback clock. Otherwise
         // a slow initial decode or seek makes it race through overdue 4K frames.
-        if (pendingPlayback) resumeTimer->start();
+        if (pendingPlayback) resumeTimer->start(0);
     });
     video->setPlayer(player);
     embeddedSubtitles = new EmbeddedSubtitles(player, this);
@@ -538,7 +544,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(player, &QMediaPlayer::mediaStatusChanged, this, [this](auto status) {
         // Audio-only files have no video frame to complete startup.
         if (pendingPlayback && status == QMediaPlayer::LoadedMedia && !player->hasVideo())
-            resumeTimer->start();
+            resumeTimer->start(0);
     });
     connect(player, &QMediaPlayer::tracksChanged, this, &PlayerWindow::restoreTrackSelections);
     connect(player, &QMediaPlayer::seekableChanged, this, &PlayerWindow::restorePosition);
@@ -1138,9 +1144,9 @@ void PlayerWindow::cancelPendingPlayback() {
     pendingPlayback.reset();
 }
 
-bool PlayerWindow::frameReadyForPlayback(const QVideoFrame &frame) const {
+bool PlayerWindow::frameReadyForPlayback(const QVideoFrame &frame, bool allowImprecise) const {
     if (!frame.isValid() || (pendingPosition && player->isSeekable())) return false;
-    if (!pendingPlayback || !pendingPlayback->position) return true;
+    if (!pendingPlayback || !pendingPlayback->position || allowImprecise) return true;
     // Old frames can still arrive after another movement of the seek slider.
     // Only the frame at the latest target may restart the playback clock.
     const qint64 start = frame.startTime();

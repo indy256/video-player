@@ -60,7 +60,7 @@ private:
     bool atEnd() const;
     void seekTo(qint64 position);
     void cancelPendingPlayback();
-    bool frameReadyForPlayback(const QVideoFrame &frame) const;
+    bool frameReadyForPlayback(const QVideoFrame &frame, bool allowImprecise) const;
     void seekToSlider();
     void skip(qint64 delta);
     void adjustVolume(int steps);

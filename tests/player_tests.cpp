@@ -1286,6 +1286,86 @@ private slots:
         QTRY_VERIFY(player->isPlaying());
         QVERIFY(player->position() < 2000);
     }
+    void repeatedSeeking() {
+        QString path = qEnvironmentVariable("VIDEO_PLAYER_SEEK_EXAMPLE");
+        if (path.isEmpty()) {
+            path = temp.filePath("seek video.mpg");
+            QProcess ffmpeg;
+            ffmpeg.start("ffmpeg", {"-v", "error", "-i", clip, "-c:v", "mpeg2video",
+                "-g", "15", "-bf", "2", "-c:a", "mp2", "-y", path});
+            QVERIFY(ffmpeg.waitForFinished(30000));
+            QCOMPARE(ffmpeg.exitCode(), 0);
+        }
+        QSettings().remove("seeking/keyframes");
+        PlayerWindow window;
+        window.show();
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *slider = window.findChild<SeekSlider *>("timeline");
+        window.openFile(path);
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 15000);
+        for (int fraction : {20, 70, 35, 90, 10, 55, 80, 25, 60, 40}) {
+            const qint64 target = player->duration() * fraction / 100;
+            QSignalSpy frames(player->videoSink(), &QVideoSink::videoFrameChanged);
+            slider->setValue(qRound(slider->maximum() * fraction / 100.0));
+            QTRY_VERIFY_WITH_TIMEOUT(!frames.isEmpty(), 5000);
+            QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 5000);
+            const auto frame = player->videoSink()->videoFrame();
+            QCOMPARE(player->error(), QMediaPlayer::NoError);
+            QVERIFY(qAbs(frame.startTime() / 1000 - target) < 2000);
+            const qint64 position = player->position();
+            QTRY_VERIFY_WITH_TIMEOUT(player->position() > position + 100, 5000);
+        }
+    }
+    void impreciseSeekRecovery_data() {
+        QTest::addColumn<bool>("pauseDuringSeek");
+        QTest::newRow("resume") << false;
+        QTest::newRow("pause-during-wait") << true;
+    }
+    void impreciseSeekRecovery() {
+        QFETCH(bool, pauseDuringSeek);
+        QSettings().remove("seeking/keyframes");
+        PlayerWindow window;
+        window.show();
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *video = window.findChild<VideoSurface *>();
+        auto *slider = window.findChild<SeekSlider *>("timeline");
+        auto *play = window.findChild<QAction *>("playPause");
+        QTRY_VERIFY(player->isPlaying());
+        const auto deliverImpreciseSeek = [&](qint64 target) {
+            {
+                // Let the backend settle without completing preparation, then
+                // simulate a demuxer that delivers only a frame past the target.
+                const QSignalBlocker blocker(video);
+                slider->setValue(qRound(target * double(slider->maximum()) / player->duration()));
+                QTRY_VERIFY(qAbs(video->videoSink()->videoFrame().startTime() / 1000 - target) < 80);
+                QTest::qWait(50);
+            }
+            QVideoFrame frame(QVideoFrameFormat(QSize(4, 4), QVideoFrameFormat::Format_RGBA8888));
+            QVERIFY(frame.map(QVideoFrame::WriteOnly));
+            std::fill(frame.bits(0), frame.bits(0) + frame.mappedBytes(0), uchar(0));
+            frame.unmap();
+            frame.setStartTime((target + 400) * 1000);
+            frame.setEndTime((target + 440) * 1000);
+            video->videoSink()->setVideoFrame(frame);
+        };
+        deliverImpreciseSeek(2000);
+        QTest::qWait(600);
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        deliverImpreciseSeek(6000);
+        if (pauseDuringSeek) play->trigger();
+        QTest::qWait(600);
+        // The superseded seek's timeout must not complete the latest request.
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        if (pauseDuringSeek) {
+            QTest::qWait(600);
+            QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+            play->trigger();
+        }
+        QTRY_VERIFY(player->isPlaying());
+        const qint64 position = player->position();
+        QTRY_VERIFY(player->position() > position + 100);
+    }
     void seekWaitsForLatestFrame_data() {
         QTest::addColumn<bool>("playing");
         QTest::addColumn<int>("gammaValue");
