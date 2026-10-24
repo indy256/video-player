@@ -48,7 +48,7 @@ private:
     void updateFullscreen();
     void updateFullscreenControls();
     void chooseFile();
-    void showPopupMenu(const QPoint &position);
+    void showPopupMenu(const QPoint &position, const QStringList &paths = {});
     QAction *execPopupMenu(QMenu &menu, const QPoint &position);
     void chooseTrack(bool audio, bool cycle = false);
     void updateSubtitles();

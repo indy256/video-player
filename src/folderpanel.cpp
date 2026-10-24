@@ -3,20 +3,97 @@
 #include <QDir>
 #include <QDateTime>
 #include <QFileInfo>
+#include <QFile>
+#include <QFileDialog>
+#include <QCheckBox>
 #include <QLabel>
 #include <QListWidget>
 #include <QMediaPlayer>
 #include <QPainter>
+#include <QMessageBox>
+#include <QProgressDialog>
+#include <QStyledItemDelegate>
+#include <QStyle>
+#include <QStylePainter>
+#include <QStyleOptionButton>
+#include <QRegion>
+#include <QSignalBlocker>
+#include <QThread>
 #include <QScrollBar>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QVideoFrame>
 #include <QVideoSink>
 #include <QWheelEvent>
+#include <memory>
+#include <atomic>
 
 namespace {
 constexpr int thumbnailReady = Qt::UserRole + 1;
 const QSize thumbnailSize(128, 72);
+
+class SelectionCheckBox : public QCheckBox {
+public:
+    using QCheckBox::QCheckBox;
+protected:
+    bool hitButton(const QPoint &position) const override {
+        return rect().contains(position);
+    }
+    void paintEvent(QPaintEvent *) override {
+        QStyleOptionButton option;
+        initStyleOption(&option);
+        option.rect = QRect(width() - 24, 6, 18, 18);
+        QStylePainter painter(this);
+        painter.drawPrimitive(QStyle::PE_IndicatorCheckBox, option);
+    }
+};
+
+class VideoDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &,
+                          const QModelIndex &) const override {
+        auto *checkbox = new SelectionCheckBox(parent);
+        checkbox->setFocusPolicy(Qt::NoFocus);
+        checkbox->setAccessibleName("Select video for saving");
+        checkbox->setToolTip("Select video for saving; click the thumbnail or filename to play");
+        checkbox->setStyleSheet("QCheckBox { background: transparent; spacing: 0px; }"
+                               "QCheckBox::indicator { width: 18px; height: 18px; }");
+        connect(checkbox, &QCheckBox::toggled, this, [this, checkbox] {
+            emit const_cast<VideoDelegate *>(this)->commitData(checkbox);
+        });
+        return checkbox;
+    }
+    void updateEditorGeometry(QWidget *editor, const QStyleOptionViewItem &option,
+                              const QModelIndex &index) const override {
+        QRect selectionArea = option.rect;
+        selectionArea.setLeft(selectionArea.left() + selectionArea.width() / 2);
+        editor->setGeometry(selectionArea);
+        QStyleOptionViewItem content(option);
+        initStyleOption(&content, index);
+        const QRect textArea = option.widget->style()->subElementRect(
+            QStyle::SE_ItemViewItemText, &content, option.widget);
+        // Let filename clicks reach the list's normal playback handler.
+        const QRegion filename(textArea.translated(-selectionArea.topLeft()));
+        editor->setMask(QRegion(editor->rect()).subtracted(filename));
+    }
+    void setEditorData(QWidget *editor, const QModelIndex &index) const override {
+        auto *checkbox = static_cast<QCheckBox *>(editor);
+        const QSignalBlocker blocker(checkbox);
+        checkbox->setChecked(index.data(Qt::CheckStateRole).toInt() == Qt::Checked);
+    }
+    void setModelData(QWidget *editor, QAbstractItemModel *model,
+                      const QModelIndex &index) const override {
+        model->setData(index, static_cast<QCheckBox *>(editor)->isChecked()
+                       ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole);
+    }
+protected:
+    void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override {
+        QStyledItemDelegate::initStyleOption(option, index);
+        option->features &= ~QStyleOptionViewItem::HasCheckIndicator;
+        option->rect.adjust(0, 0, -28, 0);
+    }
+};
 
 qint64 previewPosition(const QMediaPlayer *player) {
     return player->duration() / 2;
@@ -46,6 +123,7 @@ FolderPanel::FolderPanel(QWidget *parent) : QWidget(parent) {
     title = new QLabel;
     title->setTextFormat(Qt::PlainText);
     files = new QListWidget;
+    files->setItemDelegate(new VideoDelegate(files));
     files->setObjectName("folderFiles");
     files->setAccessibleName("Videos in current folder");
     files->setFocusPolicy(Qt::NoFocus);
@@ -62,6 +140,13 @@ FolderPanel::FolderPanel(QWidget *parent) : QWidget(parent) {
     layout->addWidget(files);
     connect(files, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
         emit fileSelected(item->data(Qt::UserRole).toString());
+    });
+    files->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(files, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
+        auto *clicked = files->itemAt(position);
+        QStringList paths = selectedFiles();
+        if (paths.isEmpty() && clicked) paths.append(clicked->data(Qt::UserRole).toString());
+        emit contextMenuRequested(files->viewport()->mapToGlobal(position), paths);
     });
     thumbnailTimer = new QTimer(this);
     thumbnailTimer->setSingleShot(true);
@@ -89,6 +174,7 @@ void FolderPanel::selectCurrent() {
 
 void FolderPanel::refresh() {
     cancelThumbnail();
+    const QStringList checked = selectedFiles();
     files->clear();
     directory = currentFile.isEmpty() ? QDir::currentPath() : QFileInfo(currentFile).absolutePath();
     title->setText(QDir(directory).dirName());
@@ -99,12 +185,57 @@ void FolderPanel::refresh() {
         if (!extensions.contains(file.suffix().toLower())) continue;
         auto *item = new QListWidgetItem(fallback, file.fileName(), files);
         item->setData(Qt::UserRole, file.absoluteFilePath());
+        item->setCheckState(checked.contains(file.absoluteFilePath()) ? Qt::Checked : Qt::Unchecked);
+        item->setFlags(item->flags() & ~Qt::ItemIsUserCheckable);
         item->setToolTip(file.fileName());
         item->setSizeHint(QSize(280, 84));
+        files->openPersistentEditor(item);
     }
     if (!files->count()) title->setText("No videos in this folder");
     selectCurrent();
     thumbnailTimer->start();
+}
+
+QStringList FolderPanel::selectedFiles() const {
+    QStringList paths;
+    for (int row = 0; row < files->count(); ++row) {
+        auto *item = files->item(row);
+        if (item->checkState() == Qt::Checked) paths.append(item->data(Qt::UserRole).toString());
+    }
+    return paths;
+}
+
+void FolderPanel::saveVideos(const QStringList &paths) {
+    if (paths.isEmpty()) return;
+    const QString destination = QFileDialog::getExistingDirectory(this, "Save videos to...");
+    if (destination.isEmpty()) return;
+    auto *progress = new QProgressDialog("Copying videos... Cancel stops after the current file.",
+                                         "Cancel", 0, 0, this);
+    progress->setWindowTitle("Save videos");
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    auto errors = std::make_shared<QStringList>();
+    auto canceled = std::make_shared<std::atomic_bool>(false);
+    connect(progress, &QProgressDialog::canceled, progress, [canceled] { *canceled = true; });
+    // QFile::copy refuses existing destinations, including the original file.
+    // Run disk I/O off the UI thread so playback stays responsive.
+    auto *job = QThread::create([paths, destination, errors, canceled] {
+        const QDir target(destination);
+        for (const auto &path : paths) {
+            if (*canceled) break;
+            QFile source(path);
+            const QString name = QFileInfo(path).fileName();
+            if (!source.copy(target.filePath(name))) errors->append(name + ": " + source.errorString());
+        }
+    });
+    connect(job, &QThread::finished, progress, [progress, errors] {
+        progress->hide();
+        if (!errors->isEmpty())
+            QMessageBox::warning(progress->parentWidget(), "Some videos could not be saved", errors->join('\n'));
+        progress->deleteLater();
+    });
+    connect(job, &QThread::finished, job, &QObject::deleteLater);
+    job->start();
 }
 
 void FolderPanel::cancelThumbnail() {

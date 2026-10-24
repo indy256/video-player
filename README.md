@@ -124,6 +124,7 @@ In either track popup, click a checkbox (or press Space on the highlighted item)
 | Mouse wheel / Up / Down | Adjust volume in 1% steps between 0 and 5%, and 5% steps above 5%, including fullscreen |
 | Enter / F / F11 | Toggle fullscreen (move the mouse into the bottom controls area to reveal the sliders) |
 | L / Folder button beside Gamma | Show/hide videos in the current folder to the right of the video; click a thumbnail or filename to play it |
+| Folder list selection / Right-click anywhere → Save videos to... | Click the right side of an item outside its filename to toggle its top-right checkbox; click its thumbnail or filename to play. Copy checked videos to a chosen folder; with none checked, copies the right-clicked list item or the current video. Existing files are kept and copy failures are reported. |
 | Escape | Close the app |
 | Fullscreen top-right corner | Reveal the close cross; click to exit (hides when the pointer leaves) |
 

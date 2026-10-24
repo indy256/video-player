@@ -8,6 +8,10 @@
 #include <QApplication>
 #include <QAbstractButton>
 #include <QFile>
+#include <QFileDialog>
+#include <QCheckBox>
+#include <QMessageBox>
+#include <QProgressDialog>
 #include <QFileOpenEvent>
 #include <QLabel>
 #include <QListWidget>
@@ -128,7 +132,8 @@ private:
     QTemporaryDir temp;
     QString clip;
     template <typename Callback>
-    bool withPopupMenu(QWidget &surface, Callback callback, QWindow *input = nullptr) {
+    bool withPopupMenu(QWidget &surface, Callback callback, QWindow *input = nullptr,
+                       const QPoint &position = QPoint(10, 10)) {
         bool opened = false;
         QTimer timer;
         timer.setInterval(10);
@@ -142,9 +147,9 @@ private:
         });
         timer.start();
         if (input) {
-            QTest::mouseClick(input, Qt::RightButton, Qt::NoModifier, QPoint(10, 10));
+            QTest::mouseClick(input, Qt::RightButton, Qt::NoModifier, position);
         } else {
-            QContextMenuEvent event(QContextMenuEvent::Mouse, QPoint(10, 10), surface.mapToGlobal(QPoint(10, 10)));
+            QContextMenuEvent event(QContextMenuEvent::Mouse, position, surface.mapToGlobal(position));
             QApplication::sendEvent(&surface, &event);
         }
         return opened;
@@ -315,6 +320,48 @@ private slots:
         QCOMPARE(files->item(0)->text(), QString("a first.mp4"));
         QCOMPARE(files->item(1)->text(), QString("b second.MP4"));
         QCOMPARE(files->currentRow(), 0);
+        const auto firstIcon = files->item(0)->icon().cacheKey();
+        const auto secondIcon = files->item(1)->icon().cacheKey();
+        QSignalSpy checkboxOpens(panel, &FolderPanel::fileSelected);
+        auto *checkbox = files->findChild<QCheckBox *>();
+        QVERIFY(checkbox);
+        QTRY_COMPARE(window.childAt(checkbox->mapTo(&window, QPoint(checkbox->width() - 14, 15))), checkbox);
+        const QList<QPoint> selectionPoints{
+            QPoint(checkbox->width() - 14, 15),
+            QPoint(checkbox->width() - 4, checkbox->height() / 2),
+            QPoint(4, checkbox->height() - 4)
+        };
+        for (const auto &point : selectionPoints) {
+            QTest::mouseClick(window.windowHandle(), Qt::LeftButton, Qt::NoModifier,
+                              checkbox->mapTo(&window, point));
+            QVERIFY(checkbox->isChecked());
+            QCOMPARE(files->item(0)->checkState(), Qt::Checked);
+            QVERIFY(checkboxOpens.isEmpty());
+            QCOMPARE(player->source(), QUrl::fromLocalFile(first));
+            QTest::mouseClick(window.windowHandle(), Qt::LeftButton, Qt::NoModifier,
+                              checkbox->mapTo(&window, point));
+            QVERIFY(!checkbox->isChecked());
+            QCOMPARE(files->item(0)->checkState(), Qt::Unchecked);
+        }
+        const QList<QPair<QWidget *, QPoint>> menuTargets{
+            {files->viewport(), files->visualItemRect(files->item(0)).center()},
+            {files->viewport(), QPoint(10, files->viewport()->height() - 10)},
+            {checkbox, checkbox->rect().center()},
+            {panel, QPoint(2, 2)},
+            {window.findChild<QSlider *>("volume"), QPoint(10, 10)},
+            {window.findChild<QSlider *>("gamma"), QPoint(10, 10)},
+            {window.findChild<SeekSlider *>("timeline"), QPoint(10, 10)},
+            {video, QPoint(10, 10)},
+            {&window, QPoint(2, 2)}
+        };
+        for (const auto &target : menuTargets) {
+            QVERIFY(withPopupMenu(*target.first, [&](QMenu &menu) {
+                auto *save = menu.findChild<QAction *>("saveVideos");
+                QVERIFY(save && save->isEnabled());
+                QCOMPARE(menu.actions().at(1), save);
+                QVERIFY(menu.rect().contains(menu.actionGeometry(save)));
+            }, nullptr, target.second));
+        }
         auto *volume = window.findChild<QSlider *>("volume");
         volume->setValue(50);
         for (QWidget *surface : {files->viewport(), static_cast<QWidget *>(panel)}) {
@@ -325,14 +372,17 @@ private slots:
                 QCOMPARE(volume->value(), 50);
             }
         }
-        const auto firstIcon = files->item(0)->icon().cacheKey();
-        const auto secondIcon = files->item(1)->icon().cacheKey();
         QTRY_VERIFY(panel->mapToGlobal(QPoint()).x() >= video->mapToGlobal(QPoint(video->width(), 0)).x());
         QTRY_VERIFY_WITH_TIMEOUT(files->item(0)->icon().cacheKey() != firstIcon, 10000);
         QTRY_VERIFY_WITH_TIMEOUT(files->item(1)->icon().cacheKey() != secondIcon, 10000);
         QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
         QCOMPARE(player->source(), QUrl::fromLocalFile(first));
-        QTest::mouseClick(files->viewport(), Qt::LeftButton, Qt::NoModifier, files->visualItemRect(files->item(1)).center());
+        const QRect secondItemRect = files->visualItemRect(files->item(1));
+        const QPoint filenamePoint(secondItemRect.center().x() + 15, secondItemRect.center().y());
+        QCOMPARE(window.childAt(files->viewport()->mapTo(&window, filenamePoint)), files->viewport());
+        QTest::mouseClick(window.windowHandle(), Qt::LeftButton, Qt::NoModifier,
+                          files->viewport()->mapTo(&window, filenamePoint));
+        QCOMPARE(files->item(1)->checkState(), Qt::Unchecked);
         QCOMPARE(player->source(), QUrl::fromLocalFile(second));
         QCOMPARE(files->currentRow(), 1);
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && video->isVisible(), 10000);
@@ -347,6 +397,94 @@ private slots:
         QCOMPARE(files->currentItem()->data(Qt::UserRole).toString(), clip);
         QTest::keyClick(&window, Qt::Key_L); // Cancel pending thumbnail work.
         QVERIFY(panel->isHidden());
+    }
+    void folderVideoSelectionAndSave() {
+        QTemporaryDir source;
+        QTemporaryDir destination;
+        QVERIFY(source.isValid() && destination.isValid());
+        const QString first = source.filePath("first.mp4");
+        const QString second = source.filePath("second.mp4");
+        QVERIFY(QFile::copy(clip, first));
+        QVERIFY(QFile::copy(clip, second));
+        FolderPanel panel;
+        panel.setFile(first);
+        panel.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&panel));
+        auto *files = panel.findChild<QListWidget *>("folderFiles");
+        QCOMPARE(files->count(), 2);
+        QSignalSpy opened(&panel, &FolderPanel::fileSelected);
+        QSignalSpy context(&panel, &FolderPanel::contextMenuRequested);
+        for (int row = 0; row < 2; ++row) {
+            QCOMPARE(files->item(row)->checkState(), Qt::Unchecked);
+            auto *checkbox = qobject_cast<QCheckBox *>(files->itemWidget(files->item(row)));
+            QVERIFY(checkbox);
+            QVERIFY(files->visualItemRect(files->item(row)).contains(
+                checkbox->mapTo(files->viewport(), checkbox->rect().center())));
+            QTest::mouseClick(checkbox, Qt::LeftButton, Qt::NoModifier,
+                              QPoint(checkbox->width() - 14, 15));
+            QCOMPARE(files->item(row)->checkState(), Qt::Checked);
+        }
+        QVERIFY(opened.isEmpty());
+        QCOMPARE(files->currentRow(), 0);
+        const QPoint position = files->visualItemRect(files->item(1)).center();
+        files->customContextMenuRequested(position);
+        QCOMPARE(context.last().at(1).toStringList(), QStringList({first, second}));
+        panel.hide();
+        panel.show();
+        QCOMPARE(files->item(0)->checkState(), Qt::Checked);
+        QCOMPARE(files->item(1)->checkState(), Qt::Checked);
+
+        const bool nativeDialogsDisabled = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+        const auto restoreDialogs = qScopeGuard([nativeDialogsDisabled] {
+            QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, nativeDialogsDisabled);
+        });
+        QTimer::singleShot(0, &panel, [&] {
+            auto *dialog = panel.findChild<QFileDialog *>();
+            if (!dialog) return;
+            dialog->setDirectory(destination.path());
+            QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection);
+        });
+        panel.saveVideos(context.last().at(1).toStringList());
+        QTRY_VERIFY_WITH_TIMEOUT(panel.findChildren<QProgressDialog *>().isEmpty(), 10000);
+        for (const auto &name : {QString("first.mp4"), QString("second.mp4")}) {
+            QFile original(source.filePath(name));
+            QFile saved(destination.filePath(name));
+            QVERIFY(original.open(QIODevice::ReadOnly));
+            QVERIFY(saved.open(QIODevice::ReadOnly));
+            QCOMPARE(saved.readAll(), original.readAll());
+        }
+        // A conflicting destination must survive and produce a visible error.
+        QFile existing(destination.filePath("first.mp4"));
+        QVERIFY(existing.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        existing.write("keep existing video");
+        existing.close();
+        QTimer::singleShot(0, &panel, [&] {
+            auto *dialog = panel.findChild<QFileDialog *>();
+            if (!dialog) return;
+            dialog->setDirectory(destination.path());
+            QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection);
+        });
+        bool errorShown = false;
+        QTimer dismissError;
+        connect(&dismissError, &QTimer::timeout, &panel, [&] {
+            auto *message = panel.findChild<QMessageBox *>();
+            if (!message) return;
+            errorShown = message->text().contains("first.mp4");
+            message->accept();
+        });
+        dismissError.start(10);
+        panel.saveVideos({first});
+        QTRY_VERIFY_WITH_TIMEOUT(errorShown, 10000);
+        QTRY_VERIFY(panel.findChildren<QProgressDialog *>().isEmpty());
+        QVERIFY(existing.open(QIODevice::ReadOnly));
+        QCOMPARE(existing.readAll(), QByteArray("keep existing video"));
+        for (int row = 0; row < 2; ++row) files->item(row)->setCheckState(Qt::Unchecked);
+        files->customContextMenuRequested(position);
+        QCOMPARE(context.last().at(1).toStringList(), QStringList({second}));
+        QTest::mouseClick(files->viewport(), Qt::LeftButton, Qt::NoModifier, position);
+        QCOMPARE(opened.count(), 1);
+        QCOMPARE(opened.first().first().toString(), second);
     }
     void popupCommands() {
         PlayerWindow window;
@@ -365,6 +503,9 @@ private slots:
         };
         QVERIFY(withPopupMenu(window, [&](QMenu &menu) {
             QCOMPARE(menu.findChild<QAction *>("playPause")->text().section('\t', 0, 0), QString("Pause"));
+            auto *save = menu.findChild<QAction *>("saveVideos");
+            QVERIFY(save && save->isEnabled());
+            QCOMPARE(menu.actions().at(1), save);
             const QString capture = qEnvironmentVariable("VIDEO_PLAYER_COMMAND_MENU_CAPTURE");
             if (!capture.isEmpty()) QVERIFY(menu.grab().save(capture));
         }));

@@ -432,6 +432,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     folderPanel->hide();
     screenLayout->addWidget(folderPanel);
     connect(folderPanel, &FolderPanel::fileSelected, this, &PlayerWindow::openFile);
+    connect(folderPanel, &FolderPanel::contextMenuRequested, this, &PlayerWindow::showPopupMenu);
     layout->addWidget(screen, 1);
     timeline = new SeekSlider;
     timeline->setObjectName("timeline");
@@ -570,6 +571,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         return action;
     };
     command("openVideo", "Open video", {QKeySequence::Open}, &PlayerWindow::chooseFile);
+    auto *saveVideos = commandsMenu->addAction("Save videos to...");
+    saveVideos->setObjectName("saveVideos");
     command("folderFiles", "Show/hide folder files", {QKeySequence(Qt::Key_L)}, [filesButton] {
         filesButton->click();
     });
@@ -703,8 +706,12 @@ QAction *PlayerWindow::execPopupMenu(QMenu &menu, const QPoint &position) {
     return menu.exec(position);
 }
 
-void PlayerWindow::showPopupMenu(const QPoint &position) {
-    execPopupMenu(*commandsMenu, position);
+void PlayerWindow::showPopupMenu(const QPoint &position, const QStringList &paths) {
+    QStringList videos = paths.isEmpty() ? folderPanel->selectedFiles() : paths;
+    if (videos.isEmpty() && player->source().isLocalFile()) videos.append(player->source().toLocalFile());
+    auto *save = commandsMenu->findChild<QAction *>("saveVideos");
+    save->setEnabled(!videos.isEmpty());
+    if (execPopupMenu(*commandsMenu, position) == save) folderPanel->saveVideos(videos);
 }
 
 void PlayerWindow::chooseTrack(bool audio, bool cycle) {
