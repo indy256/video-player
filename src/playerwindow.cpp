@@ -345,7 +345,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     player->setAudioOutput(audio);
     externalAudio = new ExternalAudio(player, this);
     connect(externalAudio, &ExternalAudio::failed, this, [this](const QString &message) {
-        QMessageBox::warning(this, "Cannot play external audio", message);
+        audioDelta->setValue(0);
+        QMessageBox::warning(this, "Cannot play audio", message);
     }, Qt::QueuedConnection);
     auto *page = new QWidget(this);
     setCentralWidget(page);
@@ -479,13 +480,33 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     gamma->setPageStep(5);
     auto *gammaLabel = addReadout("gamma", "Gamma 1.0", 2);
     gamma->setToolTip("Gamma 1.0 (double-click to reset)");
+    audioDelta = addControlSlider("audioDelta", "Sync", 3);
+    audioDelta->setRange(-20, 20);
+    audioDelta->setPageStep(10);
+    audioDelta->setTickPosition(QSlider::TicksBelow);
+    audioDelta->setTickInterval(20);
+    audioDelta->setValue(QSettings().value("audio/offsetMs", 0).toInt() / 50);
+    externalAudio->setOffset(audioDelta->value() * 50);
+    const auto syncText = [](int value) {
+        return QString("Sync %1%2 s").arg(value > 0 ? "+" : "")
+            .arg(value * 0.05, 0, 'f', 2);
+    };
+    auto *audioDeltaLabel = addReadout("audioDelta", syncText(audioDelta->value()), 3);
+    audioDelta->setToolTip("Negative: sound earlier; positive: sound later. Double-click to reset.");
+    connect(audioDelta, &QSlider::valueChanged, this, [this, audioDeltaLabel, syncText](int value) {
+        const QString text = syncText(value);
+        audioDeltaLabel->setText(text);
+        externalAudio->setOffset(value * 50);
+        QSettings().setValue("audio/offsetMs", value * 50);
+        showNotification(text);
+    });
     auto *filesButton = new QPushButton("List");
     filesButton->setObjectName("folderFilesButton");
     filesButton->setCheckable(true);
     filesButton->setFocusPolicy(Qt::NoFocus);
     filesButton->setToolTip("Show/hide folder files (L)");
     filesButton->setAccessibleName("Show/hide folder files");
-    controls->addWidget(filesButton, 0, 3, Qt::AlignVCenter);
+    controls->addWidget(filesButton, 0, 4, Qt::AlignVCenter);
     connect(filesButton, &QPushButton::toggled, folderPanel, &QWidget::setVisible);
     connect(gamma, &QSlider::valueChanged, this, [gammaLabel, this](int value) {
         const QString text = QString("Gamma %1").arg(value / 10.0, 0, 'f', 1);
@@ -759,8 +780,8 @@ bool PlayerWindow::applyTrackSelection(bool audio, const QVariant &choice, bool 
         const int count = audio ? player->audioTracks().size() : player->subtitleTracks().size();
         if (index < (audio ? 0 : -1) || index >= count) return false;
         if (audio) {
-            externalAudio->clear();
             player->setActiveAudioTrack(index);
+            externalAudio->select({});
         } else {
             externalSubtitles.clear();
             embeddedSubtitles->select(index);
@@ -819,7 +840,6 @@ void PlayerWindow::openFile(const QString &path) {
     notificationTimer->stop();
     notification->hide();
     externalSubtitles.clear();
-    externalAudio->clear();
     excludedAudioTracks.clear();
     excludedSubtitles.clear();
     pendingPosition.reset();
@@ -855,6 +875,7 @@ void PlayerWindow::openFile(const QString &path) {
     keyframes->setSource(source);
     if (keyframeSeeking->isChecked()) keyframes->load();
     player->setSource(source);
+    externalAudio->select({});
     pendingAudioSelection = settings.value("audioTrack");
     pendingSubtitleSelection = settings.value("subtitleTrack");
     restoreTrackSelections();
@@ -945,9 +966,9 @@ void PlayerWindow::updateControls() {
 }
 
 bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
-    if (watched == gamma && event->type() == QEvent::MouseButtonDblClick
+    if ((watched == gamma || watched == audioDelta) && event->type() == QEvent::MouseButtonDblClick
         && static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton) {
-        gamma->setValue(10);
+        static_cast<QSlider *>(watched)->setValue(watched == gamma ? 10 : 0);
         return true;
     }
     if (event->type() == QEvent::ContextMenu) {
@@ -1090,7 +1111,7 @@ void PlayerWindow::updateFullscreenControls() {
     controlsPanel->setGeometry(QRect(panelPosition, QSize(centralWidget()->width(), panelHeight)));
     const bool overControls = controlsPanel->geometry().contains(globalCursor);
     controlsPanel->setVisible(overControls || timeline->isSliderDown()
-        || volume->isSliderDown() || gamma->isSliderDown());
+        || volume->isSliderDown() || gamma->isSliderDown() || audioDelta->isSliderDown());
     if (controlsPanel->isVisible()) controlsPanel->raise();
 }
 

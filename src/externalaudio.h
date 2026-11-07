@@ -17,10 +17,14 @@ public:
     void select(const QString &file);
     void clear();
     void seek(qint64 position);
+    qint64 offset() const { return audioOffset; }
+    void setOffset(qint64 milliseconds);
 signals:
     void failed(const QString &message);
 private:
-    void synchronize();
+    void synchronize(bool forceSeek = false);
+    void updateSource();
+    void unload();
     void startAudio();
     void resetRates();
     void updateOutputs();
@@ -32,6 +36,8 @@ private:
     QAudioOutput *externalOutput;
     QTimer *handoffTimer;
     QString path;
+    qint64 audioOffset = 0;
+    bool audioInRange = true;
     bool ready = false;
     bool synchronizing = false;
     bool externalActive = false;

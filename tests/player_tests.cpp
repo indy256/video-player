@@ -674,6 +674,85 @@ private slots:
         window.close();
         QVERIFY(!audio->isPlaying());
     }
+    void audioOffset_data() {
+        QTest::addColumn<bool>("externalTrack");
+        QTest::newRow("embedded") << false;
+        QTest::newRow("external") << true;
+    }
+    void audioOffset() {
+        QFETCH(bool, externalTrack);
+        const QString movie = temp.filePath(QString("offset-%1.mp4").arg(QTest::currentDataTag()));
+        QVERIFY(QFile::copy(clip, movie));
+        PlayerWindow window;
+        window.show();
+        window.openFile(movie);
+        auto *video = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *audio = window.findChild<QMediaPlayer *>("externalAudioPlayer");
+        auto *external = window.findChild<ExternalAudio *>();
+        auto *delta = window.findChild<QSlider *>("audioDelta");
+        QVERIFY(delta);
+        QCOMPARE(delta->minimum(), -delta->maximum());
+        QCOMPARE(delta->value(), 0);
+        QTRY_VERIFY(video->isSeekable() && video->isPlaying());
+        video->pause();
+        external->seek(3000);
+        if (externalTrack) external->select(clip);
+        delta->setValue(20);
+        QTRY_COMPARE(audio->playbackState(), QMediaPlayer::PausedState);
+        QCOMPARE(external->offset(), qint64(1000));
+        QTRY_COMPARE(audio->position(), qint64(2000));
+        QCOMPARE(video->position(), qint64(3000));
+        QCOMPARE(window.findChild<QLabel *>("audioDeltaReadout")->text(), QString("Sync +1.00 s"));
+        delta->setValue(-20);
+        QTRY_COMPARE(audio->position(), qint64(4000));
+        QCOMPARE(video->position(), qint64(3000));
+        QCOMPARE(window.findChild<QLabel *>("audioDeltaReadout")->text(), QString("Sync -1.00 s"));
+        video->play();
+        QTRY_VERIFY(audio->isPlaying() && !audio->audioOutput()->isMuted());
+        QTRY_VERIFY(qAbs(audio->position() - video->position() - 1000) < 250);
+        delta->setValue(10);
+        QTRY_VERIFY(qAbs(audio->position() - video->position() + 500) < 250);
+        QVERIFY(video->isPlaying());
+        QVERIFY(video->audioOutput()->isMuted());
+        QCOMPARE(audio->playbackRate(), qreal(1));
+
+        // Seeking before delayed audio starts must produce silence, then resume.
+        video->pause();
+        delta->setValue(20);
+        external->seek(0);
+        video->play();
+        QVERIFY(audio->audioOutput()->isMuted());
+        QVERIFY(video->audioOutput()->isMuted());
+        QVERIFY(!audio->isPlaying());
+        QTRY_VERIFY(video->position() >= 1250 && audio->isPlaying());
+        QTRY_VERIFY(!audio->audioOutput()->isMuted());
+        QTRY_VERIFY(qAbs(audio->position() - video->position() + 1000) < 250);
+
+        // Advancing past the audio's end also stays silent until seeking back.
+        video->pause();
+        delta->setValue(-20);
+        external->seek(7500);
+        video->play();
+        QVERIFY(audio->audioOutput()->isMuted());
+        QVERIFY(video->audioOutput()->isMuted());
+        QVERIFY(!audio->isPlaying());
+        external->seek(1000);
+        QTRY_VERIFY(audio->isPlaying() && !audio->audioOutput()->isMuted());
+        QTRY_VERIFY(qAbs(audio->position() - video->position() - 1000) < 250);
+        QTest::mouseDClick(delta, Qt::LeftButton);
+        QTest::mouseRelease(delta, Qt::LeftButton);
+        QCOMPARE(delta->value(), 0);
+        QCOMPARE(external->offset(), qint64(0));
+        if (externalTrack) {
+            QCOMPARE(audio->source(), QUrl::fromLocalFile(clip));
+            QTRY_VERIFY(qAbs(audio->position() - video->position()) < 250);
+        } else {
+            QVERIFY(audio->source().isEmpty());
+            QVERIFY(!video->audioOutput()->isMuted());
+        }
+        window.close();
+        QVERIFY(!audio->isPlaying());
+    }
     void externalAudioFailure() {
         QMediaPlayer video;
         QAudioOutput output;
@@ -802,6 +881,25 @@ private slots:
             QVERIFY(qAbs(player->position() - position) < 100);
             QVERIFY(window.isVisible());
         }
+        // Offset audio must follow the embedded track selected in the menu,
+        // including when returning from a separate audio file.
+        auto *delta = window.findChild<QSlider *>("audioDelta");
+        auto *offsetAudio = window.findChild<QMediaPlayer *>("externalAudioPlayer");
+        auto *external = window.findChild<ExternalAudio *>();
+        const auto resetOffset = qScopeGuard([&] { delta->setValue(0); });
+        delta->setValue(20);
+        for (int chosen : {1, 0}) {
+            QVERIFY(selectTrack(window, chosen, Qt::Key_A));
+            QTRY_COMPARE(offsetAudio->activeAudioTrack(), chosen);
+            QTRY_COMPARE(offsetAudio->playbackState(), QMediaPlayer::PausedState);
+            QTRY_VERIFY(qAbs(offsetAudio->position() - player->position() + 1000) < 100);
+        }
+        external->select(clip);
+        QTRY_COMPARE(offsetAudio->source(), QUrl::fromLocalFile(clip));
+        QVERIFY(selectTrack(window, 1, Qt::Key_A));
+        QTRY_COMPARE(offsetAudio->source(), QUrl::fromLocalFile(multiAudio));
+        QTRY_COMPARE(offsetAudio->activeAudioTrack(), 1);
+        QCOMPARE(external->offset(), qint64(1000));
         player->play();
         QTRY_VERIFY(player->position() > position + 300);
     }
@@ -1792,6 +1890,7 @@ private slots:
         QSettings().remove("audio/volume");
     }
     void perVideoSettingsPersist() {
+        const auto clearOffset = qScopeGuard([] { QSettings().remove("audio/offsetMs"); });
         const QString first = temp.filePath("settings first.mp4");
         const QString second = temp.filePath("settings second.mp4");
         QVERIFY(QFile::copy(clip, first));
@@ -1800,22 +1899,31 @@ private slots:
 #ifdef Q_OS_WIN
         identity = identity.toCaseFolded();
 #endif
-        const QString legacyVolume = "videos/" + QString::fromLatin1(QCryptographicHash::hash(
-            identity.toUtf8(), QCryptographicHash::Sha256).toHex()) + "/volume";
+        const QString videoSettings = "videos/" + QString::fromLatin1(QCryptographicHash::hash(
+            identity.toUtf8(), QCryptographicHash::Sha256).toHex());
+        const QString legacyVolume = videoSettings + "/volume";
+        const QString legacyOffset = videoSettings + "/audioOffsetMs";
         QSettings().setValue(legacyVolume, 12);
+        QSettings().setValue(legacyOffset, 1000);
         {
             PlayerWindow window;
             auto *volume = window.findChild<QSlider *>("volume");
             auto *gamma = window.findChild<QSlider *>("gamma");
+            auto *sync = window.findChild<QSlider *>("audioDelta");
             window.openFile(first);
+            QCOMPARE(sync->value(), 0);
             volume->setValue(0);
             gamma->setValue(23);
+            sync->setValue(-15);
             window.openFile(second);
             QCOMPARE(gamma->value(), 10);
+            QCOMPARE(sync->value(), -15);
             volume->setValue(85);
+            sync->setValue(10);
             window.openFile(first);
             QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 23);
+            QCOMPARE(sync->value(), 10);
             QCOMPARE(window.findChild<QAudioOutput *>()->volume(), 0.85f);
             QCOMPARE(window.findChild<QLabel *>("volumeReadout")->text(), QString("Volume 85"));
             QCOMPARE(window.findChild<QLabel *>("gammaReadout")->text(), QString("Gamma 2.3"));
@@ -1831,25 +1939,34 @@ private slots:
             auto *gamma = window.findChild<QSlider *>("gamma");
             auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
             auto *video = window.findChild<VideoSurface *>();
+            auto *sync = window.findChild<QSlider *>("audioDelta");
+            QCOMPARE(sync->value(), 10);
+            QCOMPARE(window.findChild<ExternalAudio *>()->offset(), qint64(500));
+            QCOMPARE(window.findChild<QLabel *>("audioDeltaReadout")->text(), QString("Sync +0.50 s"));
             window.openFile(first);
             QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 23);
+            QCOMPARE(sync->value(), 10);
             QCOMPARE(player->videoSink() == video->videoSink(), video->usesGpuGamma());
             window.openFile(second);
             QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 10);
+            QCOMPARE(sync->value(), 10);
             QCOMPARE(player->videoSink(), video->videoSink());
             QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
             window.openFile(first);
             QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 23);
             gamma->setValue(10);
+            sync->setValue(0);
             window.close();
         }
         PlayerWindow reopened;
         reopened.openFile(first);
         QCOMPARE(reopened.findChild<QSlider *>("gamma")->value(), 10);
         QCOMPARE(reopened.findChild<QSlider *>("volume")->value(), 85);
+        QCOMPARE(reopened.findChild<QSlider *>("audioDelta")->value(), 0);
+        QCOMPARE(QSettings().value(legacyOffset).toInt(), 1000);
         QCOMPARE(QSettings().value(legacyVolume).toInt(), 12); // Old per-video values are neither read nor updated.
         QCOMPARE(reopened.findChild<QMediaPlayer *>("mediaPlayer")->videoSink(),
             reopened.findChild<VideoSurface *>()->videoSink());
@@ -2363,6 +2480,15 @@ private slots:
         QTest::qWait(150);
         QVERIFY(panel->isVisible());
         gamma->setSliderDown(false);
+        QTRY_VERIFY(!panel->isVisible());
+        auto *audioDelta = window.findChild<QSlider *>("audioDelta");
+        QCursor::setPos(window.mapToGlobal(QPoint(window.width() / 2, window.height() - 1)));
+        QTRY_VERIFY(audioDelta->isVisible());
+        audioDelta->setSliderDown(true);
+        QCursor::setPos(window.mapToGlobal(window.rect().center()));
+        QTest::qWait(150);
+        QVERIFY(panel->isVisible());
+        audioDelta->setSliderDown(false);
         QTRY_VERIFY(!panel->isVisible());
         QCOMPARE(QRect(video->mapToGlobal(QPoint()), video->size()), videoGeometry);
         window.showNormal();

@@ -33,9 +33,15 @@ ExternalAudio::ExternalAudio(QMediaPlayer *player, QObject *parent)
         updateOutputs();
         rateUpdate.restart();
     });
-    connect(video, &QMediaPlayer::positionChanged, this, &ExternalAudio::synchronize);
-    connect(video, &QMediaPlayer::playbackStateChanged, this, &ExternalAudio::synchronize);
-    connect(video, &QMediaPlayer::mediaStatusChanged, this, &ExternalAudio::synchronize);
+    connect(video, &QMediaPlayer::positionChanged, this, [this] { synchronize(); });
+    connect(video, &QMediaPlayer::playbackStateChanged, this, [this] { synchronize(); });
+    connect(video, &QMediaPlayer::mediaStatusChanged, this, [this] { synchronize(); });
+    connect(video, &QMediaPlayer::sourceChanged, this, &ExternalAudio::updateSource);
+    connect(video, &QMediaPlayer::activeTracksChanged, this, [this] {
+        if (!path.isEmpty()) return;
+        updateSource();
+        synchronize();
+    });
     connect(video, &QMediaPlayer::playbackRateChanged, this, [this](qreal rate) {
         if (updatingRate) return;
         playbackRate = rate;
@@ -44,16 +50,18 @@ ExternalAudio::ExternalAudio(QMediaPlayer *player, QObject *parent)
     });
     connect(audio, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
         // LoadedMedia also occurs after seeking; initialize each source only once.
-        if (path.isEmpty() || ready || status != QMediaPlayer::LoadedMedia) return;
+        if (synchronizing || audio->source().isEmpty() || ready || status != QMediaPlayer::LoadedMedia) return;
         if (audio->audioTracks().isEmpty()) {
             fail("The selected file contains no audio track.");
             return;
         }
         ready = true;
+        audio->setActiveVideoTrack(-1);
+        audio->setActiveSubtitleTrack(-1);
         synchronize();
     });
     connect(audio, &QMediaPlayer::errorOccurred, this, [this](QMediaPlayer::Error, const QString &message) {
-        if (!path.isEmpty()) fail(message);
+        if (!audio->source().isEmpty()) fail(message);
     });
 }
 
@@ -75,29 +83,50 @@ QStringList ExternalAudio::matchingFiles(const QUrl &video) {
 }
 
 void ExternalAudio::select(const QString &file) {
-    if (file == path) return;
-    clear();
     path = file;
-    audio->setSource(QUrl::fromLocalFile(file));
+    updateSource();
+    synchronize();
 }
 
 void ExternalAudio::clear() {
-    if (path.isEmpty()) return;
     path.clear();
+    unload();
+}
+
+void ExternalAudio::unload() {
+    const QScopedValueRollback guard(synchronizing, true);
     ready = false;
     handoffTimer->stop();
     setVideoRate(playbackRate);
     externalActive = false;
-    updateOutputs();
+    audioInRange = true;
     audio->stop();
     audio->setSource({});
+    updateOutputs();
+}
+
+void ExternalAudio::updateSource() {
+    const QUrl source = !path.isEmpty() ? QUrl::fromLocalFile(path)
+        : audioOffset != 0 && video->activeAudioTrack() >= 0 ? video->source() : QUrl();
+    if (source == audio->source()) return;
+    unload();
+    audio->setSource(source);
+    updateOutputs();
+}
+
+void ExternalAudio::setOffset(qint64 milliseconds) {
+    if (audioOffset == milliseconds) return;
+    audioOffset = milliseconds;
+    updateSource();
+    synchronize(true);
 }
 
 void ExternalAudio::updateOutputs() {
     const QScopedValueRollback guard(updatingOutputs, true);
     // Muting keeps the embedded decoder and its clock intact during the handoff.
-    originalOutput->setMuted(externalActive || muted);
-    externalOutput->setMuted(!externalActive || muted);
+    const bool shiftedEmbedded = path.isEmpty() && audioOffset != 0 && !audio->source().isEmpty();
+    originalOutput->setMuted(externalActive || shiftedEmbedded || muted);
+    externalOutput->setMuted(!externalActive || !audioInRange || muted);
 }
 
 void ExternalAudio::setVideoRate(qreal rate) {
@@ -117,7 +146,7 @@ void ExternalAudio::startAudio() {
 }
 
 void ExternalAudio::fail(const QString &message) {
-    const QString name = QFileInfo(path).fileName();
+    const QString name = QFileInfo(audio->source().toLocalFile()).fileName();
     clear();
     emit failed(name + ": " + message);
 }
@@ -126,34 +155,35 @@ void ExternalAudio::seek(qint64 position) {
     {
         const QScopedValueRollback guard(synchronizing, true);
         video->setPosition(position);
-        if (ready) {
-            handoffTimer->stop();
-            resetRates();
-            audio->setPosition(video->position());
-        }
     }
-    synchronize();
+    synchronize(true);
 }
 
-void ExternalAudio::synchronize() {
+void ExternalAudio::synchronize(bool forceSeek) {
     if (!ready || synchronizing) return;
     const QScopedValueRollback guard(synchronizing, true);
+    if (path.isEmpty() && audio->activeAudioTrack() != video->activeAudioTrack())
+        audio->setActiveAudioTrack(video->activeAudioTrack());
     if (video->playbackState() == QMediaPlayer::StoppedState) {
         handoffTimer->stop();
         if (audio->playbackState() != QMediaPlayer::StoppedState) audio->stop();
         return;
     }
     const bool playing = video->isPlaying() && video->mediaStatus() != QMediaPlayer::StalledMedia;
-    const qint64 position = video->position();
-    // Shorter external tracks stay silent until the video seeks back into them.
-    if (audio->duration() > 0 && position >= audio->duration()) {
+    // Positive offsets delay sound; negative offsets play it ahead of video.
+    const qint64 position = video->position() - audioOffset;
+    audioInRange = position >= 0 && (audio->duration() <= 0 || position < audio->duration());
+    // Stay silent before delayed audio starts and after a shorter track ends.
+    if (!audioInRange) {
         handoffTimer->stop();
         externalActive = true;
         updateOutputs();
         if (audio->isPlaying()) audio->pause();
+        resetRates();
         return;
     }
-    if (!playing || !audio->isPlaying()) {
+    updateOutputs();
+    if (forceSeek || !playing || !audio->isPlaying()) {
         handoffTimer->stop();
         if (!playing && audio->playbackState() != QMediaPlayer::PausedState) audio->pause();
         if (audio->position() != position) audio->setPosition(position);

@@ -87,6 +87,7 @@ private:
     QTimer *resumeTimer;
     QSlider *volume;
     QSlider *gamma = nullptr;
+    QSlider *audioDelta = nullptr;
     QWidget *controlsPanel;
     QAbstractButton *fullscreenClose;
     QTimer *controlsTimer;
