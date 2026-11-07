@@ -88,6 +88,19 @@ static bool waitForVideoExposed(PlayerWindow &window) {
                              : QTest::qWaitForWindowExposed(&window);
 }
 
+static double meanRgbError(const QImage &image, const QImage &reference, int step = 7) {
+    double error = 0;
+    int samples = 0;
+    for (int y = 0; y < image.height(); y += step)
+        for (int x = 0; x < image.width(); x += step) {
+            const QColor actual = image.pixelColor(x, y), expected = reference.pixelColor(x, y);
+            error += qAbs(actual.red() - expected.red()) + qAbs(actual.green() - expected.green())
+                + qAbs(actual.blue() - expected.blue());
+            samples += 3;
+        }
+    return error / samples;
+}
+
 class DiagnosticApplication : public QApplication {
 public:
     using QApplication::QApplication;
@@ -2213,16 +2226,10 @@ private slots:
         const QVideoFrame original = video->videoSink()->videoFrame();
         QCOMPARE(original.startTime(), scaled.startTime());
         const QImage reference = original.toImage().scaled(image.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-        double error = 0;
-        int samples = 0;
-        for (int y = 0; y < image.height(); y += 3)
-            for (int x = 0; x < image.width(); x += 3) {
-                const QColor a = image.pixelColor(x, y), b = reference.pixelColor(x, y);
-                error += qAbs(a.red() - b.red()) + qAbs(a.green() - b.green()) + qAbs(a.blue() - b.blue());
-                samples += 3;
-            }
-        qInfo() << "GPU downscale RGB mean absolute error:" << error / samples;
-        QVERIFY2(error / samples < 4, "GPU downscale must preserve SDR colors and image detail");
+        QVERIFY(!reference.isNull());
+        const double error = meanRgbError(image, reference, 3);
+        qInfo() << "GPU downscale RGB mean absolute error:" << error;
+        QVERIFY2(error < 4, "GPU downscale must preserve SDR colors and image detail");
     }
     void startupDiagnostics() {
         const QString example = qEnvironmentVariable("VIDEO_PLAYER_STARTUP_EXAMPLE");
@@ -2314,6 +2321,45 @@ private slots:
             QFile file(path);
             QVERIFY(file.open(QIODevice::WriteOnly));
             QVERIFY(file.write(QJsonDocument(report).toJson()) > 0);
+        }
+    }
+    void av1Playback() {
+        const QString movie = qEnvironmentVariable("VIDEO_PLAYER_AV1_EXAMPLE");
+        if (movie.isEmpty()) QSKIP("Set VIDEO_PLAYER_AV1_EXAMPLE to an AV1 video");
+        PlayerWindow window;
+        window.show();
+        window.openFile(movie);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *video = window.findChild<VideoSurface *>();
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 15000);
+        player->pause();
+        const auto frame = video->videoSink()->videoFrame();
+        QVERIFY(frame.isValid());
+        const QImage decoded = frame.toImage();
+        QVERIFY(!decoded.isNull());
+        QProcess reference;
+        reference.start("ffmpeg", {"-hide_banner", "-loglevel", "error", "-ss",
+            QString::number(frame.startTime() / 1000000.0, 'f', 6), "-i", movie,
+            "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1"});
+        QVERIFY(reference.waitForFinished(30000));
+        QCOMPARE(reference.exitCode(), 0);
+        const QImage expected = QImage::fromData(reference.readAllStandardOutput());
+        QVERIFY(!expected.isNull());
+        QCOMPARE(decoded.size(), expected.size());
+        const double decodedError = meanRgbError(decoded, expected);
+        qInfo() << "AV1 decoded RGB mean absolute error:" << decodedError;
+        QVERIFY2(decodedError < 15, "AV1 playback must match a software-decoded reference");
+        if (video->usesGpuGamma()) {
+            QTest::qWait(150);
+            const QImage display = video->grabFrame();
+            QVERIFY(!display.isNull());
+            const auto content = video->contentRect();
+            const double ratio = double(display.width()) / video->width();
+            const QRect pixels(qRound(content.x() * ratio), qRound(content.y() * ratio),
+                qRound(content.width() * ratio), qRound(content.height() * ratio));
+            const double displayError = meanRgbError(display.copy(pixels).scaled(expected.size()), expected);
+            qInfo() << "AV1 displayed RGB mean absolute error:" << displayError;
+            QVERIFY2(displayError < 15, "The displayed AV1 frame must match the decoded image");
         }
     }
     void gpuGammaPlayback() {

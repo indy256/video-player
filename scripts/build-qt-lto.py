@@ -142,6 +142,29 @@ def patch_mingw(src):
         simd.write_text(content)
 
 
+def fix_d3d11_av1(content):
+    marker = "// Use FFmpeg's native AV1 surface pool on Qualcomm."
+    if marker in content:
+        return content
+    original = "void D3D11TextureConverter::SetupDecoderTextures(AVCodecContext *s)\n{\n"
+    if content.count(original) != 1:
+        raise RuntimeError("Unrecognized Qt D3D11 decoder texture configuration")
+    return content.replace(original, original + """    // Use FFmpeg's native AV1 surface pool on Qualcomm.
+    // Qt's preallocated pool produces green frames; the normal texture-copy path still applies.
+    if (s->codec_id == AV_CODEC_ID_AV1) {
+        const auto *context = reinterpret_cast<const AVHWDeviceContext *>(s->hw_device_ctx->data);
+        const auto *device = static_cast<const AVD3D11VADeviceContext *>(context->hwctx);
+        ComPtr<IDXGIDevice> dxgiDevice;
+        ComPtr<IDXGIAdapter> adapter;
+        DXGI_ADAPTER_DESC description{};
+        if (SUCCEEDED(device->device->QueryInterface(IID_PPV_ARGS(dxgiDevice.GetAddressOf())))
+            && SUCCEEDED(dxgiDevice->GetAdapter(adapter.GetAddressOf()))
+            && SUCCEEDED(adapter->GetDesc(&description)) && description.VendorId == 0x4d4f4351) // QCOM
+            return;
+    }
+""")
+
+
 def patch_msvc_multimedia(src):
     # QPlaybackOptions' inline move operations can reference its shared-data
     # destructor from QtMultimediaQuick. Qt 6.10/6.11 omit the DLL export on
@@ -240,6 +263,9 @@ def main():
                 patch_mingw(src)
                 options += [f"-DCMAKE_PROJECT_QtBase_INCLUDE={(SCRIPTS / 'qt-mingw-lto.cmake').as_posix()}"]
         if module == "qtmultimedia":
+            if args.toolchain in ("msvc", "mingw"):
+                d3d11 = src / "src/plugins/multimedia/ffmpeg/qffmpeghwaccel_d3d11.cpp"
+                d3d11.write_text(fix_d3d11_av1(d3d11.read_text()))
             if args.toolchain == "msvc":
                 patch_msvc_multimedia(src)
             options += [f"-DFFMPEG_DIR={sdk.as_posix()}", "-DQT_DEPLOY_FFMPEG=ON", "-DFEATURE_ffmpeg=ON",

@@ -38,6 +38,7 @@ def main():
             raise RuntimeError(f"Qt source checksum mismatch: {path}")
         content = path.read_text(encoding="utf-8")
         if name == "qffmpeghwaccel_d3d11.cpp":
+            content = builder.fix_d3d11_av1(content)
             anchor = "AVFrameUPtr copyFromHwPoolD3D11(AVFrameUPtr src)"
             allocation = "    AVFrameUPtr dest = makeAVFrame();"
             if content.count(anchor) != 1 or content.count(allocation) != 1:

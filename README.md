@@ -15,6 +15,12 @@ pass and allowing Qt's threaded render loop. Gamma, fullscreen overlays, mouse
 controls, keyboard shortcuts, and file drops use the same player controls. If GPU
 rendering fails, playback switches to the existing widget and CPU gamma fallback.
 
+Windows Qt source builds and the experimental backend use FFmpeg's native AV1
+surface pool on Qualcomm GPUs to prevent green frames while keeping hardware
+decoding. Stock Qt kits require one of these patched backends. To check colors, set
+`VIDEO_PLAYER_AV1_EXAMPLE` to an AV1 file and run `player_tests av1Playback -platform windows`.
+When testing the experimental backend from `build`, set `QT_PLUGIN_PATH` to that directory.
+
 ## Build and run on this machine
 
 Only one player runs per user. Opening another video through the executable sends its absolute path to the existing player and brings that window forward. Launching without a filename brings the existing player forward. The previous video's position is saved when switching files.
