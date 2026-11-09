@@ -268,8 +268,10 @@ jobs:
           chmod +x AppDir/AppRun
           curl -fL --retry 3 -o appimagetool.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool.AppImage
+          curl -fL --retry 5 --retry-all-errors -o appimage-runtime https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          echo '2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  appimage-runtime' | sha256sum -c -
           mkdir -p dist
-          ./appimagetool.AppImage AppDir dist/vp-linux-x64.AppImage
+          ./appimagetool.AppImage --runtime-file appimage-runtime AppDir dist/vp-linux-x64.AppImage
           chmod 755 dist/vp-linux-x64.AppImage
           ffmpeg -v error -f lavfi -i 'testsrc2=size=160x90:rate=10' -t 1 -c:v mpeg4 -y build/runtime-check.mp4
           xvfb-run -a env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u LD_LIBRARY_PATH \
