@@ -1183,8 +1183,16 @@ private slots:
         QSignalSpy subtitleStates(reader, &QMediaPlayer::playbackStateChanged);
         QTest::qWait(250);
         QVERIFY(subtitleStates.isEmpty()); // No repeated restarts after the final caption.
+        QTRY_VERIFY(subtitleText(window).isEmpty());
+        // A seek beyond the point where the subtitle reader ended must still
+        // reposition it, even though there are no more cues at that position.
+        player->pause();
+        window.findChild<EmbeddedSubtitles *>()->seek();
+        player->setPosition(6000);
+        QTRY_COMPARE(reader->position(), player->position());
         player->setPlaybackRate(1);
         player->setPosition(1500);
+        player->play();
         QTRY_COMPARE(subtitleText(window), QString("First external"));
         player->pause();
         QVERIFY(selectSubtitle(window, path));
@@ -1196,6 +1204,38 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && sink->videoFrame().isValid(), 10000);
         QTRY_VERIFY(subtitleText(window).isEmpty());
         QVERIFY(reader->source().isEmpty());
+    }
+    void subtitleSeekingMovieExample() {
+        const QString path = qEnvironmentVariable("VIDEO_PLAYER_SUBTITLE_SEEK_EXAMPLE");
+        if (path.isEmpty()) QSKIP("Optional local subtitle seeking example");
+        PlayerWindow window;
+        window.show();
+        window.findChild<QAction *>("keyframeSeeking")->setChecked(false);
+        window.openFile(path);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *timeline = window.findChild<SeekSlider *>("timeline");
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && timeline->isEnabled()
+                                 && player->subtitleTracks().size() >= 2, 20000);
+        QVERIFY(selectSubtitle(window, 1));
+        struct Cue { qint64 position; const char *text; };
+        const Cue cues[] = {{74000, "rather be lucky"}, {996700, "Tom's involved"},
+                            {2133400, "pretty awful"}, {3480400, "key word"},
+                            {4500700, "woman you love"}, {80000, "People are afraid"}};
+        const int duration = qEnvironmentVariableIntValue("VIDEO_PLAYER_SUBTITLE_SEEK_DURATION_MS");
+        QElapsedTimer session;
+        session.start();
+        int pass = 0;
+        do {
+            for (const auto &cue : cues) {
+                timeline->setValue(qRound(cue.position * double(timeline->maximum()) / player->duration()));
+                QTRY_VERIFY_WITH_TIMEOUT(subtitleText(window).contains(QString::fromLatin1(cue.text)), 10000);
+                if (duration > 0) QTest::qWait(3000);
+            }
+            timeline->setValue(qRound(60000.0 * timeline->maximum() / player->duration()));
+            QTRY_VERIFY_WITH_TIMEOUT(subtitleText(window).isEmpty(), 10000);
+            ++pass;
+            qInfo() << "Subtitle seek pass" << pass << "elapsed" << session.elapsed() << "ms";
+        } while (duration > 0 ? session.elapsed() < duration : pass < 3);
     }
     void subtitleCyclingExample() {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)

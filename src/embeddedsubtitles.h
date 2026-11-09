@@ -12,6 +12,7 @@ public:
     explicit EmbeddedSubtitles(QMediaPlayer *video, QObject *parent = nullptr);
     void select(int track);
     void clear();
+    void seek();
     int activeTrack() const { return selected; }
     QString text() const;
 signals:

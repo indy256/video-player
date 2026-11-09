@@ -1163,6 +1163,7 @@ void PlayerWindow::seekTo(qint64 position) {
         pendingPlayback = PlaybackRequest{playing, position};
         player->pause();
     }
+    embeddedSubtitles->seek();
     externalAudio->seek(position);
     if (!prepare && playing) player->play();
 }

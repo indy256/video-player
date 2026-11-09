@@ -11,7 +11,10 @@ EmbeddedSubtitles::EmbeddedSubtitles(QMediaPlayer *video, QObject *parent)
     connect(video, &QMediaPlayer::playbackStateChanged, this, &EmbeddedSubtitles::synchronize);
     connect(video, &QMediaPlayer::playbackRateChanged, this, &EmbeddedSubtitles::synchronize);
     connect(reader, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
-        if (status == QMediaPlayer::EndOfMedia) finishedAt = this->video->position();
+        if (status == QMediaPlayer::EndOfMedia) {
+            finishedAt = this->video->position();
+            sink.setSubtitleText({});
+        }
         // LoadedMedia is also emitted after seeking.
         if (ready || status != QMediaPlayer::LoadedMedia) return;
         ready = true;
@@ -31,6 +34,14 @@ void EmbeddedSubtitles::select(int track) {
     sink.setSubtitleText({});
     if (track >= 0 && reader->source().isEmpty()) reader->setSource(video->source());
     synchronize();
+}
+
+void EmbeddedSubtitles::seek() {
+    finishedAt = -1;
+    playbackClock.invalidate();
+    // Force synchronization even if the requested position matches the old clock.
+    clockPosition = -1;
+    sink.setSubtitleText({});
 }
 
 void EmbeddedSubtitles::clear() {
