@@ -109,8 +109,11 @@ if(BUILD_TESTING)
     find_package(Qt6 REQUIRED COMPONENTS Test)
     qt_add_executable(player_tests tests/player_tests.cpp)
     target_link_libraries(player_tests PRIVATE player_ui Qt6::Test)
-    # Explicit stdout logging keeps QtTest assertions visible on Windows CI.
-    add_test(NAME player_tests COMMAND player_tests -o -,txt)
+    # GUI executables on Windows may not have a usable stdout stream.
+    add_test(NAME player_tests COMMAND ${CMAKE_COMMAND}
+        "-DTEST_EXECUTABLE=$<TARGET_FILE:player_tests>"
+        "-DTEST_LOG=${CMAKE_CURRENT_BINARY_DIR}/player-tests-ctest.txt"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPlayerTests.cmake")
     qt_add_executable(instance_tests tests/instance_tests.cpp)
     target_link_libraries(instance_tests PRIVATE player_ui Qt6::Test)
     add_test(NAME instance_tests COMMAND instance_tests)
