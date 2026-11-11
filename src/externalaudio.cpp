@@ -1,4 +1,5 @@
 #include "externalaudio.h"
+#include "audiokeepalive.h"
 #include <QAudioOutput>
 #include <QDir>
 #include <QFileInfo>
@@ -15,6 +16,8 @@ ExternalAudio::ExternalAudio(QMediaPlayer *player, QObject *parent)
     externalOutput->setVolume(originalOutput->volume());
     externalOutput->setMuted(true);
     audio->setAudioOutput(externalOutput);
+    installAudioKeepAlive(video);
+    installAudioKeepAlive(audio);
     connect(originalOutput, &QAudioOutput::volumeChanged, externalOutput, &QAudioOutput::setVolume);
     connect(originalOutput, &QAudioOutput::mutedChanged, this, [this](bool value) {
         if (updatingOutputs) return;

@@ -82,6 +82,8 @@ Opening a video prepares its first frame while paused, with the black video surf
 
 Seeking uses the same preparation: the video and audio pause while the requested frame is decoded, then resume if playback was running before the seek. Further seeks replace the pending target, and pressing pause while waiting cancels the automatic resume. Seeking during an ordinary pause keeps the new frame paused. Audio-only files and seeks to the exact end do not wait for a video frame.
 
+On Windows, a separate stream of digital silence keeps the audio output device active during playback and brief seek preparation pauses. This avoids reopening the Bluetooth output when Qt resets its media audio sink on each seek, which can clip the first sound on devices such as AirPods. The silent stream follows the selected output device and is released after two seconds of paused playback, immediately on stop, or when the player closes. Embedded and external audio use the same workaround.
+
 Some formats, including MPEG program streams, deliver a frame beyond the requested timestamp. After receiving a new valid frame, seeking waits up to one second for a precise match, then accepts the available frame so playback can continue. A new seek restarts that wait; pausing during it keeps playback paused.
 
 The opt-in `startupDiagnostics` test records the first nine seconds without a warmup interval, using isolated settings and the regular player window. With the Qt DLL directory and test-only `ffmpeg` on PATH:

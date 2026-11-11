@@ -34,6 +34,8 @@
 #include <cmath>
 #include <QStackedWidget>
 #include <QAudioOutput>
+#include <QAudioSink>
+#include <QMediaDevices>
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
 #include <QAudioBufferOutput>
 #include <QAudioBuffer>
@@ -1473,6 +1475,42 @@ private slots:
             QVERIFY(reopened.findChild<QAction *>("keyframeSeeking")->isChecked());
         }
         QSettings().remove("seeking/keyframes");
+    }
+    void arrowSeekingKeepsWindowsAudioOpen() {
+#ifdef Q_OS_WIN
+        if (QMediaDevices::defaultAudioOutput().isNull()) QSKIP("No audio output device");
+        PlayerWindow window;
+        window.show();
+        window.findChild<QAction *>("keyframeSeeking")->setChecked(false);
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        QTRY_VERIFY(player->isPlaying() && player->hasAudio());
+        auto *sink = player->findChild<QAudioSink *>("audioKeepAliveSink");
+        QVERIFY(sink);
+        QTRY_COMPARE(sink->state(), QAudio::ActiveState);
+        QSignalSpy states(sink, &QAudioSink::stateChanged);
+        QSignalSpy destroyed(sink, &QObject::destroyed);
+        const qint64 elapsed = sink->elapsedUSecs();
+        for (Qt::Key key : {Qt::Key_Left, Qt::Key_Right, Qt::Key_Left}) {
+            window.findChild<QAction *>(key == Qt::Key_Left ? "back3" : "forward3")->trigger();
+            QTRY_VERIFY(player->isPlaying());
+            QTest::qWait(100);
+            QVERIFY(destroyed.isEmpty());
+            QCOMPARE(player->findChild<QAudioSink *>("audioKeepAliveSink"), sink);
+            QCOMPARE(sink->state(), QAudio::ActiveState);
+        }
+        QVERIFY(states.isEmpty());
+        QVERIFY(sink->elapsedUSecs() > elapsed);
+        player->pause();
+        QTRY_COMPARE_WITH_TIMEOUT(destroyed.size(), 1, 4000);
+        QVERIFY(!player->findChild<QAudioSink *>("audioKeepAliveSink"));
+        player->play();
+        QTRY_VERIFY(player->findChild<QAudioSink *>("audioKeepAliveSink"));
+        player->stop();
+        QVERIFY(!player->findChild<QAudioSink *>("audioKeepAliveSink"));
+#else
+        QSKIP("Windows audio endpoint workaround");
+#endif
     }
     void keyframeArrowSeeking() {
         QSettings().remove("seeking/keyframes");
