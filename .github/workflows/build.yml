@@ -197,6 +197,17 @@ jobs:
           print(pathlib.Path('build/gpu-gamma-tests.txt').read_text())
           sys.exit(result.returncode)
 
+      - name: Upload test failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-logs-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            build/Testing/Temporary/
+            build/player-tests-ctest.txt
+            build/gpu-gamma-tests.txt
+          if-no-files-found: ignore
+
       - name: Package Windows application and runtime
         if: runner.os == 'Windows'
         shell: pwsh

@@ -128,5 +128,8 @@ if(BUILD_TESTING)
         add_test(NAME update_unix COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/tests/update-unix.sh"
             "${CMAKE_CURRENT_SOURCE_DIR}/packaging/update-unix.sh")
     endif()
-    set_tests_properties(player_tests PROPERTIES ENVIRONMENT "QT_MEDIA_BACKEND=ffmpeg;QT_QPA_PLATFORM=offscreen")
+    # This single CTest entry runs the entire playback suite. Hosted macOS
+    # runners can exceed CI's default per-test limit of 120 seconds.
+    set_tests_properties(player_tests PROPERTIES TIMEOUT 300
+        ENVIRONMENT "QT_MEDIA_BACKEND=ffmpeg;QT_QPA_PLATFORM=offscreen")
 endif()
