@@ -56,6 +56,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QQuickWindow>
+#include <QScreen>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -2476,6 +2477,57 @@ private slots:
             QVERIFY(file.open(QIODevice::WriteOnly));
             QVERIFY(file.write(QJsonDocument(report).toJson()) > 0);
         }
+    }
+    void hardwareSeekingMovieExample() {
+        if (QApplication::platformName() != "windows") QSKIP("Windows desktop capture required");
+        const QString movie = qEnvironmentVariable("VIDEO_PLAYER_SEEK_EXAMPLE");
+        if (movie.isEmpty()) QSKIP("Optional local hardware seeking example");
+        PlayerWindow window;
+        // Desktop captures must see the video rather than an overlapping window.
+        window.setWindowFlag(Qt::WindowStaysOnTopHint);
+        window.resize(900, 600);
+        window.show();
+        window.openFile(movie);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *video = window.findChild<VideoSurface *>();
+        auto *timeline = window.findChild<SeekSlider *>("timeline");
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 15000);
+        window.findChild<QAction *>("keyframeSeeking")->setChecked(true);
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<KeyframeIndex *>()->isReady(), 20000);
+        window.findChild<QSlider *>("gamma")->setValue(14);
+        int captures = 0, greenFrames = 0;
+        QTimer capture;
+        capture.setInterval(16);
+        connect(&capture, &QTimer::timeout, &capture, [&] {
+            const QPoint origin = video->mapToGlobal(QPoint());
+            const QImage image = video->screen()->grabWindow(0, origin.x(), origin.y(),
+                video->width(), video->height()).toImage();
+            if (image.isNull()) return;
+            ++captures;
+            int green = 0, count = 0;
+            for (int y = image.height() / 4; y < image.height() * 3 / 4; y += 11)
+                for (int x = image.width() / 4; x < image.width() * 3 / 4; x += 11) {
+                    const QColor c = image.pixelColor(x, y);
+                    green += c.green() > 70 && c.red() < 25 && c.blue() < 25;
+                    ++count;
+                }
+            if (count && green > count * 0.9) ++greenFrames;
+        });
+        capture.start();
+        for (int i = 0; i < 90; ++i) {
+            if (i == 45) window.showFullScreen();
+            if (i < 30)
+                window.findChild<QAction *>(i % 2 ? "forward3" : "back3")->trigger();
+            else if (i < 60)
+                timeline->setValue(timeline->maximum() * ((i * 17) % 95 + 2) / 100);
+            else
+                window.findChild<QAction *>(i % 2 ? "forward30" : "back30")->trigger();
+            QTest::qWait(i % 3 ? 30 : 700);
+        }
+        QTest::qWait(1000);
+        qInfo() << "Captures" << captures << "green frames" << greenFrames;
+        QVERIFY(captures > 100);
+        QCOMPARE(greenFrames, 0);
     }
     void av1Playback() {
         const QString movie = qEnvironmentVariable("VIDEO_PLAYER_AV1_EXAMPLE");

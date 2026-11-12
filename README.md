@@ -15,10 +15,14 @@ pass and allowing Qt's threaded render loop. Gamma, fullscreen overlays, mouse
 controls, keyboard shortcuts, and file drops use the same player controls. If GPU
 rendering fails, playback switches to the existing widget and CPU gamma fallback.
 
-Windows Qt source builds and the experimental backend use FFmpeg's native AV1
-surface pool on Qualcomm GPUs to prevent green frames while keeping hardware
-decoding. Stock Qt kits require one of these patched backends. To check colors, set
+On Qualcomm GPUs, Windows Qt source builds and the experimental backend use FFmpeg's
+native AV1 surface pool and synchronize decoder-surface copies to prevent green frames
+during playback and seeking. Hardware decoding stays enabled; stock Qt kits require
+one of these patched backends. To check colors, set
 `VIDEO_PLAYER_AV1_EXAMPLE` to an AV1 file and run `player_tests av1Playback -platform windows`.
+Set `VIDEO_PLAYER_SEEK_EXAMPLE` to the Match Point MKV
+and run `player_tests hardwareSeekingMovieExample -platform windows` to check
+displayed pixels during arrow and timeline seeks, including fullscreen and gamma.
 When testing the experimental backend from `build`, set `QT_PLUGIN_PATH` to that directory.
 
 ## Build and run on this machine

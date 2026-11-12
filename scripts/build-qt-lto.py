@@ -142,27 +142,54 @@ def patch_mingw(src):
         simd.write_text(content)
 
 
-def fix_d3d11_av1(content):
-    marker = "// Use FFmpeg's native AV1 surface pool on Qualcomm."
-    if marker in content:
-        return content
-    original = "void D3D11TextureConverter::SetupDecoderTextures(AVCodecContext *s)\n{\n"
-    if content.count(original) != 1:
-        raise RuntimeError("Unrecognized Qt D3D11 decoder texture configuration")
-    return content.replace(original, original + """    // Use FFmpeg's native AV1 surface pool on Qualcomm.
-    // Qt's preallocated pool produces green frames; the normal texture-copy path still applies.
+def fix_d3d11(content):
+    helper = """bool isQualcommDevice(ID3D11Device *device)
+{
+    ComPtr<IDXGIDevice> dxgiDevice;
+    ComPtr<IDXGIAdapter> adapter;
+    DXGI_ADAPTER_DESC description{};
+    return SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(dxgiDevice.GetAddressOf())))
+        && SUCCEEDED(dxgiDevice->GetAdapter(adapter.GetAddressOf()))
+        && SUCCEEDED(adapter->GetDesc(&description)) && description.VendorId == 0x4d4f4351;
+}
+
+"""
+    anchor = "ComPtr<ID3D11Texture2D> copyTexture("
+    if helper not in content:
+        if content.count(anchor) != 1:
+            raise RuntimeError("Unrecognized Qt D3D11 frame copy")
+        content = content.replace(anchor, helper + anchor)
+    # Replace the preambles too, so previously patched source trees upgrade cleanly.
+    patches = (
+        (r"(void D3D11TextureConverter::SetupDecoderTextures\(AVCodecContext \*s\)\n\{\n).*?"
+         r"(    int ret = avcodec_get_hw_frames_parameters)", """    // Qualcomm needs FFmpeg's native AV1 surface pool.
     if (s->codec_id == AV_CODEC_ID_AV1) {
         const auto *context = reinterpret_cast<const AVHWDeviceContext *>(s->hw_device_ctx->data);
         const auto *device = static_cast<const AVD3D11VADeviceContext *>(context->hwctx);
-        ComPtr<IDXGIDevice> dxgiDevice;
-        ComPtr<IDXGIAdapter> adapter;
-        DXGI_ADAPTER_DESC description{};
-        if (SUCCEEDED(device->device->QueryInterface(IID_PPV_ARGS(dxgiDevice.GetAddressOf())))
-            && SUCCEEDED(dxgiDevice->GetAdapter(adapter.GetAddressOf()))
-            && SUCCEEDED(adapter->GetDesc(&description)) && description.VendorId == 0x4d4f4351) // QCOM
+        if (isQualcommDevice(device->device))
             return;
     }
-""")
+"""),
+        (r"(ComPtr<ID3D11Texture2D> copyTexture\(.*?poolIndex, nullptr\);\n).*?"
+         r"(    return destTex;\n})", """
+    // Finish the copy before seeking can reuse its source surface.
+    if (isQualcommDevice(hwDevCtx->device)) {
+        D3D11_QUERY_DESC queryDesc{D3D11_QUERY_EVENT, 0};
+        ComPtr<ID3D11Query> done;
+        if (SUCCEEDED(hwDevCtx->device->CreateQuery(&queryDesc, &done))) {
+            hwDevCtx->device_context->End(done.Get());
+            hwDevCtx->device_context->Flush();
+            while (hwDevCtx->device_context->GetData(done.Get(), nullptr, 0, 0) == S_FALSE)
+                Sleep(1);
+        }
+    }
+"""),
+    )
+    for pattern, patch in patches:
+        content, count = re.subn(pattern, lambda m: m[1] + patch + m[2], content, flags=re.S)
+        if count != 1:
+            raise RuntimeError("Unrecognized Qt D3D11 decoder implementation")
+    return content
 
 
 def patch_msvc_multimedia(src):
@@ -265,7 +292,7 @@ def main():
         if module == "qtmultimedia":
             if args.toolchain in ("msvc", "mingw"):
                 d3d11 = src / "src/plugins/multimedia/ffmpeg/qffmpeghwaccel_d3d11.cpp"
-                d3d11.write_text(fix_d3d11_av1(d3d11.read_text()))
+                d3d11.write_text(fix_d3d11(d3d11.read_text()))
             if args.toolchain == "msvc":
                 patch_msvc_multimedia(src)
             options += [f"-DFFMPEG_DIR={sdk.as_posix()}", "-DQT_DEPLOY_FFMPEG=ON", "-DFEATURE_ffmpeg=ON",
