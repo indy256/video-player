@@ -1207,6 +1207,51 @@ private slots:
         QTRY_VERIFY(subtitleText(window).isEmpty());
         QVERIFY(reader->source().isEmpty());
     }
+    void audioSeekingMovieExample() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        const QString path = qEnvironmentVariable("VIDEO_PLAYER_AUDIO_SEEK_EXAMPLE");
+        if (path.isEmpty()) QSKIP("Optional local audio seeking example");
+        PlayerWindow window;
+        window.show();
+        window.findChild<QAction *>("keyframeSeeking")->setChecked(false);
+        window.openFile(path);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *timeline = window.findChild<SeekSlider *>("timeline");
+        QAudioBufferOutput buffers;
+        player->setAudioBufferOutput(&buffers);
+        AudioSamples samples;
+        QElapsedTimer lastBuffer;
+        qint64 largestGap = 0;
+        connect(&buffers, &QAudioBufferOutput::audioBufferReceived, &buffers,
+                [&](const QAudioBuffer &buffer) {
+            if (!buffer.isValid()) return;
+            samples.add(buffer);
+            if (lastBuffer.isValid()) largestGap = qMax(largestGap, lastBuffer.elapsed());
+            lastBuffer.restart();
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && timeline->isEnabled()
+                                 && player->subtitleTracks().size() >= 2, 20000);
+        QVERIFY(selectSubtitle(window, 1));
+        const qint64 targets[] = {74000, 996700, 2133400, 3480400, 4500700, 80000};
+        for (int pass = 0; pass < 5; ++pass) {
+            for (qint64 target : targets) {
+                timeline->setValue(qRound(target * double(timeline->maximum()) / player->duration()));
+                QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 10000);
+                QTest::qWait(500);
+                samples = {};
+                lastBuffer.invalidate();
+                largestGap = 0;
+                QTest::qWait(2000);
+                qInfo() << "Audio seek" << target << "buffers" << samples.count
+                        << "peak" << samples.peak << "largest gap" << largestGap;
+                QVERIFY2(player->isPlaying() && samples.count > 5 && samples.peak > 0.0001f
+                         && largestGap < 1000, "Audio stalled or stopped after a seek");
+            }
+        }
+#else
+        QSKIP("Audio buffer monitoring requires Qt 6.8");
+#endif
+    }
     void subtitleSeekingMovieExample() {
         const QString path = qEnvironmentVariable("VIDEO_PLAYER_SUBTITLE_SEEK_EXAMPLE");
         if (path.isEmpty()) QSKIP("Optional local subtitle seeking example");
@@ -1511,6 +1556,37 @@ private slots:
 #else
         QSKIP("Windows audio endpoint workaround");
 #endif
+    }
+    void playingArrowSeekingDoesNotPause_data() {
+        QTest::addColumn<bool>("externalTrack");
+        QTest::newRow("embedded") << false;
+        QTest::newRow("external") << true;
+    }
+    void playingArrowSeekingDoesNotPause() {
+        QFETCH(bool, externalTrack);
+        PlayerWindow window;
+        window.show();
+        window.findChild<QAction *>("keyframeSeeking")->setChecked(false);
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        QTRY_VERIFY(player->isPlaying() && player->isSeekable());
+        if (externalTrack) {
+            window.findChild<ExternalAudio *>()->select(clip);
+            QTRY_VERIFY(window.findChild<QMediaPlayer *>("externalAudioPlayer")->isPlaying());
+        }
+        QSignalSpy states(player, &QMediaPlayer::playbackStateChanged);
+        for (const char *action : {"back3", "forward3"}) {
+            window.findChild<QAction *>(action)->trigger();
+            const qint64 target = player->position();
+            QVERIFY(player->isPlaying());
+            QTRY_VERIFY(qAbs(player->videoSink()->videoFrame().startTime() / 1000 - target) < 500);
+            QVERIFY(states.isEmpty());
+        }
+        // A pause immediately after a keyboard seek must not be undone later.
+        window.findChild<QAction *>("back3")->trigger();
+        window.findChild<QAction *>("playPause")->trigger();
+        QTest::qWait(300);
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
     }
     void keyframeArrowSeeking() {
         QSettings().remove("seeking/keyframes");

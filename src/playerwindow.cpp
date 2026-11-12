@@ -1152,20 +1152,20 @@ bool PlayerWindow::atEnd() const {
         || (player->duration() > 0 && player->position() >= player->duration());
 }
 
-void PlayerWindow::seekTo(qint64 position) {
-    const bool resume = atEnd() && position < player->duration();
-    const bool playing = player->isPlaying() || (pendingPlayback && pendingPlayback->play) || resume;
+void PlayerWindow::seekTo(qint64 position, bool prepareVideo) {
+    const bool playing = player->isPlaying() || (pendingPlayback && pendingPlayback->play)
+        || (atEnd() && position < player->duration());
     if (position == player->position() && (!pendingPlayback || pendingPlayback->position == position)) return;
     cancelPendingPlayback();
     // There is no new video frame to wait for at the exact end or in audio-only media.
-    const bool prepare = player->hasVideo() && position < player->duration();
+    const bool prepare = prepareVideo && player->hasVideo() && position < player->duration();
     if (prepare) {
         pendingPlayback = PlaybackRequest{playing, position};
         player->pause();
     }
     embeddedSubtitles->seek();
     externalAudio->seek(position);
-    if (!prepare && playing) player->play();
+    if (!prepare && playing && !player->isPlaying()) player->play();
 }
 
 void PlayerWindow::cancelPendingPlayback() {
@@ -1204,7 +1204,8 @@ void PlayerWindow::skip(qint64 delta) {
     if (!timeline->isEnabled()) return;
     qint64 position = qBound(qint64(0), player->position() + delta, player->duration());
     if (position > 0 && position < player->duration()) position = keyframePosition(position, delta > 0);
-    seekTo(position);
+    // Playing skips need not wait for video decoding before resuming audio.
+    seekTo(position, !player->isPlaying());
     showNotification(QString("%1 %2 seconds — %3")
         .arg(delta < 0 ? "Backward" : "Forward").arg(qAbs(delta) / 1000).arg(timestamp(position)));
 }

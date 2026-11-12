@@ -58,7 +58,7 @@ private:
     void updateTimeline();
     qint64 keyframePosition(qint64 position, bool forward = false) const;
     bool atEnd() const;
-    void seekTo(qint64 position);
+    void seekTo(qint64 position, bool prepareVideo = true);
     void cancelPendingPlayback();
     bool frameReadyForPlayback(const QVideoFrame &frame, bool allowImprecise) const;
     void seekToSlider();
