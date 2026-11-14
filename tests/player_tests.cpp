@@ -2901,12 +2901,13 @@ private slots:
         QCursor::setPos(savedCursor);
     }
     void fullscreenCloseButton() {
+        const QPoint savedCursor = QCursor::pos();
+        const auto restoreCursor = qScopeGuard([&] { QCursor::setPos(savedCursor); });
         PlayerWindow window;
         window.show();
         auto *button = window.findChild<QAbstractButton *>("fullscreenClose");
         QVERIFY(button);
         QVERIFY(!button->isVisible());
-        const QPoint savedCursor = QCursor::pos();
         window.openFile(clip);
         window.showFullScreen();
         QVERIFY(waitForVideoExposed(window));
@@ -2922,10 +2923,15 @@ private slots:
             window.centralWidget()->rect().topRight()));
         QCOMPARE(QRect(video->mapToGlobal(QPoint()), video->size()), videoGeometry);
         QCursor::setPos(button->mapToGlobal(button->rect().center()));
+        // Offscreen window routing can report a leave while the cursor is still inside.
+        QEvent leave(QEvent::Leave);
+        QApplication::sendEvent(button, &leave);
+        QVERIFY(button->isVisible());
         QTest::qWait(150);
         QVERIFY(button->isVisible());
         QCursor::setPos(window.mapToGlobal(window.rect().center()));
-        QTRY_VERIFY(!button->isVisible());
+        QApplication::sendEvent(button, &leave);
+        QVERIFY(!button->isVisible());
         QCursor::setPos(window.mapToGlobal(QPoint(window.width() - 1, 1)));
         QTRY_VERIFY(button->isVisible());
         window.showNormal();
@@ -2939,7 +2945,6 @@ private slots:
         QTest::mouseRelease(button, Qt::LeftButton, Qt::NoModifier, button->rect().center());
         QTRY_VERIFY(!window.isVisible());
         QVERIFY(!button->isVisible());
-        QCursor::setPos(savedCursor);
     }
     void mousePlaybackAndFullscreen() {
         const QPoint cursor = QCursor::pos();

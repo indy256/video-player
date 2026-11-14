@@ -304,7 +304,8 @@ protected:
         painter.drawLine(center + QPointF(7, -7), center + QPointF(-7, 7));
     }
     void leaveEvent(QEvent *event) override {
-        hide();
+        // Native window transitions can deliver a leave while the cursor stays inside.
+        if (!geometry().contains(QCursor::pos())) hide();
         QAbstractButton::leaveEvent(event);
     }
 };
