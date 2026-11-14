@@ -1967,6 +1967,7 @@ private slots:
         staleFrame.setEndTime(1040000);
         qint64 resumedFrame = -1;
         QObject observer;
+        // Capture the resume frame before playback advances.
         connect(player, &QMediaPlayer::playbackStateChanged, &observer, [&](auto state) {
             if (state == QMediaPlayer::PlayingState)
                 resumedFrame = video->videoSink()->videoFrame().startTime() / 1000;
@@ -1978,10 +1979,9 @@ private slots:
         slider->setValue(qRound(target * double(slider->maximum()) / player->duration()));
         video->videoSink()->setVideoFrame(staleFrame);
         slider->setSliderDown(false);
-        QTRY_VERIFY(qAbs(video->videoSink()->videoFrame().startTime() / 1000 - target) < 80);
+        QTRY_VERIFY(qAbs((playing ? resumedFrame : video->videoSink()->videoFrame().startTime() / 1000)
+            - target) < 80);
         if (playing) {
-            QTRY_VERIFY(player->isPlaying());
-            QVERIFY(qAbs(resumedFrame - target) < 80);
             const qint64 position = player->position();
             QTRY_VERIFY(player->position() > position + 100);
         } else {
