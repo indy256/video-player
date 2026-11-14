@@ -45,7 +45,7 @@
 #include <cmath>
 #include <functional>
 #ifdef Q_OS_WIN
-#include <qt_windows.h>
+#include "windowsbackground.h"
 #endif
 
 namespace {
@@ -690,16 +690,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
 
 #ifdef Q_OS_WIN
 bool PlayerWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result) {
-    const auto *msg = static_cast<MSG *>(message);
-    if (msg->message == WM_ERASEBKGND) {
-        RECT rect;
-        GetClientRect(msg->hwnd, &rect);
-        FillRect(reinterpret_cast<HDC>(msg->wParam), &rect,
-            static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-        *result = 1;
-        return true;
-    }
-    return QMainWindow::nativeEvent(eventType, message, result);
+    return eraseBlackBackground(message, result)
+        || QMainWindow::nativeEvent(eventType, message, result);
 }
 #endif
 

@@ -1385,11 +1385,19 @@ private slots:
             QVERIFY(rendered.save(capture));
         }
     }
+    void nativeStartupBackground_data() {
+        QTest::addColumn<bool>("videoWindow");
+        QTest::newRow("player") << false;
+        QTest::newRow("video") << true;
+    }
     void nativeStartupBackground() {
 #ifdef Q_OS_WIN
         if (QApplication::platformName() != "windows") QSKIP("Requires the native Windows platform");
+        QFETCH(bool, videoWindow);
         PlayerWindow window;
-        const HWND handle = reinterpret_cast<HWND>(window.winId());
+        auto *quick = window.findChild<VideoSurface *>()->quickView();
+        if (videoWindow && !quick) QSKIP("Requires the GPU video surface");
+        const HWND handle = reinterpret_cast<HWND>(videoWindow ? quick->winId() : window.winId());
         QCOMPARE(GetClassLongPtrW(handle, GCLP_HBRBACKGROUND),
             reinterpret_cast<LONG_PTR>(GetStockObject(BLACK_BRUSH)));
         // Exercise Windows' pre-paint erase on a white bitmap without showing the window.

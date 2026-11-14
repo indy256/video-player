@@ -11,6 +11,24 @@
 #include <QSGRendererInterface>
 #include <QVBoxLayout>
 #include <QVideoWidget>
+#ifdef Q_OS_WIN
+#include "windowsbackground.h"
+#endif
+
+namespace {
+class VideoView : public QQuickView {
+public:
+    VideoView() { setColor(Qt::black); }
+
+#ifdef Q_OS_WIN
+protected:
+    bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override {
+        return eraseBlackBackground(message, result)
+            || QQuickView::nativeEvent(eventType, message, result);
+    }
+#endif
+};
+}
 
 VideoSurface::VideoSurface(QWidget *parent) : QWidget(parent) {
     auto *box = new QVBoxLayout(this);
@@ -23,9 +41,8 @@ VideoSurface::VideoSurface(QWidget *parent) : QWidget(parent) {
         useCpuRenderer();
         return;
     }
-    quick = new QQuickView;
+    quick = new VideoView;
     container = QWidget::createWindowContainer(quick, this);
-    quick->setColor(Qt::black);
     quick->setResizeMode(QQuickView::SizeRootObjectToView);
     quick->installEventFilter(this);
     connect(quick, &QQuickWindow::sceneGraphInitialized, this, [this] {
