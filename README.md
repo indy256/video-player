@@ -20,7 +20,7 @@ native AV1 surface pool and synchronize decoder-surface copies to prevent green 
 during playback and seeking. Hardware decoding stays enabled; stock Qt kits require
 one of these patched backends. To check colors, set
 `VIDEO_PLAYER_AV1_EXAMPLE` to an AV1 file and run `player_tests av1Playback -platform windows`.
-Set `VIDEO_PLAYER_SEEK_EXAMPLE` to the Match Point MKV
+Set `VIDEO_PLAYER_SEEK_EXAMPLE` to a local video with a seek table
 and run `player_tests hardwareSeekingMovieExample -platform windows` to check
 displayed pixels during arrow and timeline seeks, including fullscreen and gamma.
 When testing the experimental backend from `build`, set `QT_PLUGIN_PATH` to that directory.

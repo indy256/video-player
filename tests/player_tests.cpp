@@ -1772,17 +1772,16 @@ private slots:
         QCOMPARE(index.seekPosition(2350, true), qint64(2350));
         QVERIFY(index.bytesRead() <= 8 * 1024 * 1024);
     }
-    void matchPointIndexExample() {
+    void containerIndexExample() {
         const QString file = qEnvironmentVariable("VIDEO_PLAYER_SEEK_EXAMPLE");
-        if (file.isEmpty()) QSKIP("Set VIDEO_PLAYER_SEEK_EXAMPLE to the Match Point MKV");
+        if (file.isEmpty()) QSKIP("Set VIDEO_PLAYER_SEEK_EXAMPLE to a local video with a seek table");
         KeyframeIndex index;
         QElapsedTimer timer;
         timer.start();
         QVERIFY(loadIndex(index, file));
         QVERIFY(index.isReady());
-        QCOMPARE(index.seekPosition(1278784), qint64(1274899));
         QVERIFY(index.bytesRead() <= 8 * 1024 * 1024);
-        qInfo() << "Match Point index bytes read:" << index.bytesRead() << "elapsed ms:" << timer.elapsed();
+        qInfo() << "Container index bytes read:" << index.bytesRead() << "elapsed ms:" << timer.elapsed();
     }
     void keyframeIndexSourceChanges() {
         KeyframeIndex index;
