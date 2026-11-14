@@ -45,12 +45,17 @@ private:
         if (!player->hasAudio() || player->playbackState() == QMediaPlayer::StoppedState) {
             release.stop();
             sink.reset();
+            prepared = false;
             return;
         }
-        if (!player->isPlaying()) {
+        const bool playing = player->isPlaying();
+        // Open the endpoint during initial paused decoding, before play() starts
+        // the media clock. Once released, notifications must not reopen it while paused.
+        if (!playing && prepared) {
             if (sink && !release.isActive()) release.start();
             return;
         }
+        prepared = true;
         release.stop();
         auto device = player->audioOutput()->device();
         if (device.isNull()) device = QMediaDevices::defaultAudioOutput();
@@ -67,6 +72,7 @@ private:
         // volume, timing, and mute controls. Do not reset it when media seeks.
         sink->start(&silence);
         if (sink->error() != QAudio::NoError) sink.reset();
+        if (sink && !playing) release.start();
     }
     QMediaPlayer *player;
     QMediaDevices devices;
@@ -74,6 +80,7 @@ private:
     QAudioDevice currentDevice;
     Silence silence;
     std::unique_ptr<QAudioSink> sink;
+    bool prepared = false;
 };
 }
 #endif

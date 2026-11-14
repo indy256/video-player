@@ -3,6 +3,7 @@
 #include "keyframeindex.h"
 #include "gammafilter.h"
 #include "externalaudio.h"
+#include "audiokeepalive.h"
 #include "embeddedsubtitles.h"
 #include "folderpanel.h"
 #include <QApplication>
@@ -31,6 +32,7 @@
 #include <memory>
 #include <QQuickItem>
 #include <QScopeGuard>
+#include <QtEndian>
 #include <cmath>
 #include <QStackedWidget>
 #include <QAudioOutput>
@@ -147,6 +149,12 @@ class PlayerTests : public QObject {
 private:
     QTemporaryDir temp;
     QString clip;
+    bool loadIndex(KeyframeIndex &index, const QString &file) {
+        QSignalSpy finished(&index, &KeyframeIndex::finished);
+        index.setSource(QUrl::fromLocalFile(file));
+        index.load();
+        return QTest::qWaitFor([&] { return finished.size() == 1; }, 10000);
+    }
     template <typename Callback>
     bool withPopupMenu(QWidget &surface, Callback callback, QWindow *input = nullptr,
                        const QPoint &position = QPoint(10, 10)) {
@@ -1416,8 +1424,15 @@ private slots:
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(video->isVisible() && video->videoSink()->videoFrame().isValid(), 10000);
         // A subsequent open must initialize on black rather than showing a cached frame.
+        QSignalSpy frames(video->videoSink(), &QVideoSink::videoFrameChanged);
         window.openFile(clip);
-        QVERIFY(!video->videoSink()->videoFrame().isValid());
+        // Audio endpoint preparation may deliver a new decoded frame before openFile returns.
+        const auto cleared = [&] {
+            for (const auto &frame : frames)
+                if (!qvariant_cast<QVideoFrame>(frame.at(0)).isValid()) return true;
+            return false;
+        };
+        QTRY_VERIFY(cleared());
         QTRY_VERIFY_WITH_TIMEOUT(video->videoSink()->videoFrame().isValid(), 10000);
     }
     void startupWaitsForFirstFrame() {
@@ -1522,6 +1537,41 @@ private slots:
         }
         QSettings().remove("seeking/keyframes");
     }
+    void windowsAudioPreparedBeforePlayback() {
+#ifdef Q_OS_WIN
+        if (QMediaDevices::defaultAudioOutput().isNull()) QSKIP("No audio output device");
+        QAudioOutput output;
+        QVideoSink video;
+        QMediaPlayer player;
+        player.setAudioOutput(&output);
+        player.setVideoSink(&video);
+        installAudioKeepAlive(&player);
+        player.setSource(QUrl::fromLocalFile(clip));
+        player.pause();
+        QTRY_VERIFY_WITH_TIMEOUT(player.playbackState() == QMediaPlayer::PausedState
+            && video.videoFrame().isValid(), 10000);
+        auto *sink = player.findChild<QAudioSink *>("audioKeepAliveSink");
+        QVERIFY(sink);
+        QTRY_COMPARE(sink->state(), QAudio::ActiveState);
+        player.play();
+        QCOMPARE(player.findChild<QAudioSink *>("audioKeepAliveSink"), sink);
+        player.pause();
+        QSignalSpy destroyed(sink, &QObject::destroyed);
+        QTRY_COMPARE_WITH_TIMEOUT(destroyed.size(), 1, 4000);
+        // A device notification during a long pause must not reopen the endpoint.
+        QVERIFY(QMetaObject::invokeMethod(&output, "deviceChanged", Qt::DirectConnection));
+        QVERIFY(!player.findChild<QAudioSink *>("audioKeepAliveSink"));
+        player.play();
+        QTRY_VERIFY(player.findChild<QAudioSink *>("audioKeepAliveSink"));
+        player.stop();
+        QVERIFY(!player.findChild<QAudioSink *>("audioKeepAliveSink"));
+        // Stopping resets preparation, including when reopening the same source.
+        player.pause();
+        QTRY_VERIFY(player.findChild<QAudioSink *>("audioKeepAliveSink"));
+#else
+        QSKIP("Windows audio endpoint workaround");
+#endif
+    }
     void arrowSeekingKeepsWindowsAudioOpen() {
 #ifdef Q_OS_WIN
         if (QMediaDevices::defaultAudioOutput().isNull()) QSKIP("No audio output device");
@@ -1547,13 +1597,6 @@ private slots:
         }
         QVERIFY(states.isEmpty());
         QVERIFY(sink->elapsedUSecs() > elapsed);
-        player->pause();
-        QTRY_COMPARE_WITH_TIMEOUT(destroyed.size(), 1, 4000);
-        QVERIFY(!player->findChild<QAudioSink *>("audioKeepAliveSink"));
-        player->play();
-        QTRY_VERIFY(player->findChild<QAudioSink *>("audioKeepAliveSink"));
-        player->stop();
-        QVERIFY(!player->findChild<QAudioSink *>("audioKeepAliveSink"));
 #else
         QSKIP("Windows audio endpoint workaround");
 #endif
@@ -1631,6 +1674,115 @@ private slots:
         QVERIFY(player->position() >= 4000);
         mode->trigger();
         QSettings().remove("seeking/keyframes");
+    }
+    void containerKeyframeIndex_data() {
+        QTest::addColumn<QString>("suffix");
+        QTest::addColumn<int>("bFrames");
+        QTest::addColumn<int>("startOffset");
+        QTest::newRow("matroska-cues") << QString("mkv") << 0 << 0;
+        QTest::newRow("matroska-start-offset") << QString("mkv") << 0 << 2;
+        QTest::newRow("mp4-b-frames") << QString("mp4") << 2 << 0;
+        QTest::newRow("avi-index") << QString("avi") << 0 << 0;
+    }
+    void containerKeyframeIndex() {
+        QFETCH(QString, suffix);
+        QFETCH(int, bFrames);
+        QFETCH(int, startOffset);
+        const QString file = temp.filePath("container-index." + suffix);
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", {"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24",
+            "-t", "8", "-c:v", "mpeg4", "-g", "24", "-bf", QString::number(bFrames),
+            "-output_ts_offset", QString::number(startOffset), "-y", file});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        KeyframeIndex index;
+        QVERIFY(loadIndex(index, file));
+        QVERIFY(index.isReady());
+        QCOMPARE(index.seekPosition(2350), qint64(2000));
+        QCOMPARE(index.seekPosition(2350, true), qint64(3000));
+        QCOMPARE(index.seekPosition(7350), qint64(7000));
+        QVERIFY(index.bytesRead() <= 8 * 1024 * 1024);
+    }
+    void containerIndexSkipsLargePadding() {
+        QFile source(clip);
+        QVERIFY(source.open(QIODevice::ReadOnly));
+        const QByteArray data = source.readAll();
+        qsizetype moov = -1;
+        for (qsizetype offset = 0; offset + 8 <= data.size();) {
+            const auto size = qFromBigEndian<quint32>(data.constData() + offset);
+            QVERIFY(size >= 8 && size <= data.size() - offset);
+            if (data.mid(offset + 4, 4) == "moov") { moov = offset; break; }
+            offset += size;
+        }
+        QVERIFY(moov > 0);
+        QFile padded(temp.filePath("padded-index.mp4"));
+        QVERIFY(padded.open(QIODevice::WriteOnly));
+        QCOMPARE(padded.write(data.first(moov)), qint64(moov));
+        // Keep media offsets intact, but move the seek table behind 32 MiB of padding.
+        constexpr quint32 padding = 32 * 1024 * 1024;
+        QByteArray atom(8, '\0');
+        qToBigEndian<quint32>(padding + 8, atom.data());
+        atom.replace(4, 4, "free");
+        QCOMPARE(padded.write(atom), qint64(8));
+        QVERIFY(padded.seek(padded.pos() + padding));
+        QCOMPARE(padded.write(data.sliced(moov)), qint64(data.size() - moov));
+        padded.close();
+        KeyframeIndex index;
+        QVERIFY(loadIndex(index, padded.fileName()));
+        QVERIFY(index.isReady());
+        QCOMPARE(index.seekPosition(2350), qint64(2000));
+        QVERIFY(index.bytesRead() < padding / 4);
+    }
+    void containerIndexReadBudget() {
+        QFile attachment(temp.filePath("index-padding.bin"));
+        QVERIFY(attachment.open(QIODevice::WriteOnly));
+        QVERIFY(attachment.resize(12 * 1024 * 1024));
+        attachment.close();
+        const QString file = temp.filePath("oversized-index-header.mkv");
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", {"-v", "error", "-i", clip, "-c", "copy", "-attach", attachment.fileName(),
+            "-metadata:s:t", "mimetype=application/octet-stream", "-y", file});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        KeyframeIndex index;
+        QVERIFY(loadIndex(index, file));
+        QVERIFY(!index.isReady());
+        QVERIFY(index.bytesRead() > 0 && index.bytesRead() <= 8 * 1024 * 1024);
+        QCOMPARE(index.seekPosition(2350), qint64(2350));
+        QCOMPARE(index.seekPosition(2350, true), qint64(2350));
+    }
+    void containerIndexWithoutSeekTable_data() {
+        QTest::addColumn<QString>("suffix");
+        QTest::addColumn<QStringList>("options");
+        QTest::newRow("transport-stream") << QString("ts") << QStringList{"-an", "-c:v", "mpeg2video"};
+        QTest::newRow("matroska-no-cues") << QString("mkv") << QStringList{"-c", "copy", "-live", "1"};
+    }
+    void containerIndexWithoutSeekTable() {
+        QFETCH(QString, suffix);
+        QFETCH(QStringList, options);
+        const QString file = temp.filePath("unindexed." + suffix);
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", QStringList{"-v", "error", "-i", clip} + options + QStringList{"-y", file});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        KeyframeIndex index;
+        QVERIFY(loadIndex(index, file));
+        QVERIFY(!index.isReady());
+        QCOMPARE(index.seekPosition(2350), qint64(2350));
+        QCOMPARE(index.seekPosition(2350, true), qint64(2350));
+        QVERIFY(index.bytesRead() <= 8 * 1024 * 1024);
+    }
+    void matchPointIndexExample() {
+        const QString file = qEnvironmentVariable("VIDEO_PLAYER_SEEK_EXAMPLE");
+        if (file.isEmpty()) QSKIP("Set VIDEO_PLAYER_SEEK_EXAMPLE to the Match Point MKV");
+        KeyframeIndex index;
+        QElapsedTimer timer;
+        timer.start();
+        QVERIFY(loadIndex(index, file));
+        QVERIFY(index.isReady());
+        QCOMPARE(index.seekPosition(1278784), qint64(1274899));
+        QVERIFY(index.bytesRead() <= 8 * 1024 * 1024);
+        qInfo() << "Match Point index bytes read:" << index.bytesRead() << "elapsed ms:" << timer.elapsed();
     }
     void keyframeIndexSourceChanges() {
         KeyframeIndex index;
