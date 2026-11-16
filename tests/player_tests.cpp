@@ -1687,20 +1687,27 @@ private slots:
         QTest::addColumn<QString>("suffix");
         QTest::addColumn<int>("bFrames");
         QTest::addColumn<int>("startOffset");
-        QTest::newRow("matroska-cues") << QString("mkv") << 0 << 0;
-        QTest::newRow("matroska-start-offset") << QString("mkv") << 0 << 2;
-        QTest::newRow("mp4-b-frames") << QString("mp4") << 2 << 0;
-        QTest::newRow("avi-index") << QString("avi") << 0 << 0;
+        QTest::addColumn<bool>("negativeOffsets");
+        QTest::newRow("matroska-cues") << QString("mkv") << 0 << 0 << false;
+        QTest::newRow("matroska-start-offset") << QString("mkv") << 0 << 2 << false;
+        QTest::newRow("mp4-b-frames") << QString("mp4") << 2 << 0 << false;
+        QTest::newRow("mp4-no-b-frames") << QString("mp4") << 0 << 0 << false;
+        QTest::newRow("mp4-start-offset") << QString("mp4") << 2 << 2 << false;
+        QTest::newRow("mp4-signed-composition-offsets") << QString("mp4") << 2 << 0 << true;
+        QTest::newRow("avi-index") << QString("avi") << 0 << 0 << false;
     }
     void containerKeyframeIndex() {
         QFETCH(QString, suffix);
         QFETCH(int, bFrames);
         QFETCH(int, startOffset);
+        QFETCH(bool, negativeOffsets);
         const QString file = temp.filePath("container-index." + suffix);
         QProcess ffmpeg;
-        ffmpeg.start("ffmpeg", {"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24",
+        QStringList options{"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24",
             "-t", "8", "-c:v", "mpeg4", "-g", "24", "-bf", QString::number(bFrames),
-            "-output_ts_offset", QString::number(startOffset), "-y", file});
+            "-output_ts_offset", QString::number(startOffset)};
+        if (negativeOffsets) options << "-movflags" << "+negative_cts_offsets";
+        ffmpeg.start("ffmpeg", options + QStringList{"-y", file});
         QVERIFY(ffmpeg.waitForFinished(30000));
         QCOMPARE(ffmpeg.exitCode(), 0);
         KeyframeIndex index;
@@ -1710,6 +1717,22 @@ private slots:
         QCOMPARE(index.seekPosition(2350, true), qint64(3000));
         QCOMPARE(index.seekPosition(7350), qint64(7000));
         QVERIFY(index.bytesRead() <= 8 * 1024 * 1024);
+    }
+    void mp4IndexSkipsKeyframePayloads() {
+        const QString file = temp.filePath("large-keyframe-payloads.mp4");
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", {"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=25",
+            "-t", "4", "-c:v", "mpeg4", "-g", "1", "-q:v", "1", "-y", file});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        QVERIFY(QFileInfo(file).size() > 8 * 1024 * 1024);
+        KeyframeIndex index;
+        QVERIFY(loadIndex(index, file));
+        QVERIFY(index.isReady());
+        QCOMPARE(index.seekPosition(2350), qint64(2320));
+        QCOMPARE(index.seekPosition(2350, true), qint64(2360));
+        QCOMPARE(index.seekPosition(3950), qint64(3920));
+        QVERIFY(index.bytesRead() < 2 * 1024 * 1024);
     }
     void containerIndexSkipsLargePadding() {
         QFile source(clip);
