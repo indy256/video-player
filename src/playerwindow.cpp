@@ -479,29 +479,29 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     gamma->setPageStep(5);
     auto *gammaLabel = addReadout("gamma", "Gamma 1.0", 2);
     gamma->setToolTip("Gamma 1.0 (double-click to reset)");
-    audioDelta = addSlider("audioDelta", "Sync", 3);
+    audioDelta = addSlider("audioDelta", "Audio offset", 3);
     audioDelta->setRange(-20, 20);
     audioDelta->setPageStep(10);
     audioDelta->setTickPosition(QSlider::TicksBelow);
     audioDelta->setTickInterval(20);
-    constexpr int syncStepMs = 50;
-    audioDelta->setValue(QSettings().value("audio/offsetMs", 0).toInt() / syncStepMs);
-    const int initialOffsetMs = audioDelta->value() * syncStepMs;
-    externalAudio->setOffset(initialOffsetMs);
-    const auto syncText = [](int offsetMs) {
-        return QString("Sync %1%2 s").arg(offsetMs > 0 ? "+" : "")
-            .arg(offsetMs / 1000.0, 0, 'f', 2);
-    };
-    auto *audioDeltaLabel = addReadout("audioDelta", syncText(initialOffsetMs), 3);
-    audioDelta->setToolTip("Negative: sound earlier; positive: sound later. Double-click to reset.");
-    connect(audioDelta, &QSlider::valueChanged, this, [this, audioDeltaLabel, syncText](int value) {
-        const int offsetMs = value * syncStepMs;
-        const QString text = syncText(offsetMs);
+    audioDelta->setToolTip("Move left to delay audio or right to advance it. Double-click to reset.");
+    auto *audioDeltaLabel = addReadout("audioDelta", {}, 3);
+    constexpr int timingStepMs = 50;
+    const auto applyAudioOffset = [this, audioDeltaLabel](int steps, bool save) {
+        const int leadMs = steps * timingStepMs;
+        const QString text = leadMs == 0 ? QStringLiteral("Audio in sync")
+                                         : QString::asprintf("Audio %+.2f s", leadMs / 1000.0);
+        externalAudio->setOffset(leadMs);
         audioDeltaLabel->setText(text);
-        externalAudio->setOffset(offsetMs);
-        QSettings().setValue("audio/offsetMs", offsetMs);
-        showNotification(text);
-    });
+        if (save) {
+            QSettings().setValue("audio/offsetMs", -leadMs);
+            showNotification(text);
+        }
+    };
+    // The saved setting measures delay. Keep existing corrections when displaying audio lead.
+    audioDelta->setValue(-(QSettings().value("audio/offsetMs", 0).toInt() / timingStepMs));
+    applyAudioOffset(audioDelta->value(), false);
+    connect(audioDelta, &QSlider::valueChanged, this, [applyAudioOffset](int steps) { applyAudioOffset(steps, true); });
     auto *filesButton = new QPushButton("List");
     filesButton->setObjectName("folderFilesButton");
     filesButton->setCheckable(true);

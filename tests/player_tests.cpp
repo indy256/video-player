@@ -725,28 +725,33 @@ private slots:
         video->pause();
         external->seek(3000);
         if (externalTrack) external->select(clip);
-        delta->setValue(20);
+        QTest::mouseClick(delta, Qt::LeftButton, Qt::NoModifier, QPoint(delta->width() - 1, delta->height() / 2));
         QTRY_COMPARE(audio->playbackState(), QMediaPlayer::PausedState);
         QCOMPARE(external->offset(), qint64(1000));
-        QTRY_COMPARE(audio->position(), qint64(2000));
-        QCOMPARE(video->position(), qint64(3000));
-        QCOMPARE(window.findChild<QLabel *>("audioDeltaReadout")->text(), QString("Sync +1.00 s"));
-        delta->setValue(-20);
         QTRY_COMPARE(audio->position(), qint64(4000));
         QCOMPARE(video->position(), qint64(3000));
-        QCOMPARE(window.findChild<QLabel *>("audioDeltaReadout")->text(), QString("Sync -1.00 s"));
+        auto *readout = window.findChild<QLabel *>("audioDeltaReadout");
+        QVERIFY(readout);
+        QCOMPARE(readout->text(), QString("Audio +1.00 s"));
+        QTest::mouseClick(delta, Qt::LeftButton, Qt::NoModifier, QPoint(0, delta->height() / 2));
+        QTRY_COMPARE(audio->position(), qint64(2000));
+        QCOMPARE(video->position(), qint64(3000));
+        QCOMPARE(readout->text(), QString("Audio -1.00 s"));
+        const auto audioAtOffset = [&](qint64 leadMs) {
+            return qAbs(audio->position() - (video->position() + leadMs)) < 250;
+        };
         video->play();
         QTRY_VERIFY(audio->isPlaying() && !audio->audioOutput()->isMuted());
-        QTRY_VERIFY(qAbs(audio->position() - video->position() - 1000) < 250);
+        QTRY_VERIFY(audioAtOffset(-1000));
         delta->setValue(10);
-        QTRY_VERIFY(qAbs(audio->position() - video->position() + 500) < 250);
+        QTRY_VERIFY(audioAtOffset(500));
         QVERIFY(video->isPlaying());
         QVERIFY(video->audioOutput()->isMuted());
         QCOMPARE(audio->playbackRate(), qreal(1));
 
         // Seeking before delayed audio starts must produce silence, then resume.
         video->pause();
-        delta->setValue(20);
+        delta->setValue(-20);
         external->seek(0);
         video->play();
         QVERIFY(audio->audioOutput()->isMuted());
@@ -754,11 +759,11 @@ private slots:
         QVERIFY(!audio->isPlaying());
         QTRY_VERIFY(video->position() >= 1250 && audio->isPlaying());
         QTRY_VERIFY(!audio->audioOutput()->isMuted());
-        QTRY_VERIFY(qAbs(audio->position() - video->position() + 1000) < 250);
+        QTRY_VERIFY(audioAtOffset(-1000));
 
         // Advancing past the audio's end also stays silent until seeking back.
         video->pause();
-        delta->setValue(-20);
+        delta->setValue(20);
         external->seek(7500);
         video->play();
         QVERIFY(audio->audioOutput()->isMuted());
@@ -766,14 +771,15 @@ private slots:
         QVERIFY(!audio->isPlaying());
         external->seek(1000);
         QTRY_VERIFY(audio->isPlaying() && !audio->audioOutput()->isMuted());
-        QTRY_VERIFY(qAbs(audio->position() - video->position() - 1000) < 250);
+        QTRY_VERIFY(audioAtOffset(1000));
         QTest::mouseDClick(delta, Qt::LeftButton);
         QTest::mouseRelease(delta, Qt::LeftButton);
         QCOMPARE(delta->value(), 0);
         QCOMPARE(external->offset(), qint64(0));
+        QCOMPARE(readout->text(), QString("Audio in sync"));
         if (externalTrack) {
             QCOMPARE(audio->source(), QUrl::fromLocalFile(clip));
-            QTRY_VERIFY(qAbs(audio->position() - video->position()) < 250);
+            QTRY_VERIFY(audioAtOffset(0));
         } else {
             QVERIFY(audio->source().isEmpty());
             QVERIFY(!video->audioOutput()->isMuted());
@@ -920,7 +926,7 @@ private slots:
             QVERIFY(selectTrack(window, chosen, Qt::Key_A));
             QTRY_COMPARE(offsetAudio->activeAudioTrack(), chosen);
             QTRY_COMPARE(offsetAudio->playbackState(), QMediaPlayer::PausedState);
-            QTRY_VERIFY(qAbs(offsetAudio->position() - player->position() + 1000) < 100);
+            QTRY_VERIFY(qAbs(offsetAudio->position() - player->position() - 1000) < 100);
         }
         external->select(clip);
         QTRY_COMPARE(offsetAudio->source(), QUrl::fromLocalFile(clip));
@@ -2338,13 +2344,15 @@ private slots:
         const QString legacyOffset = videoSettings + "/audioOffsetMs";
         QSettings().setValue(legacyVolume, 12);
         QSettings().setValue(legacyOffset, 1000);
+        QSettings().setValue("audio/offsetMs", 250); // A delay saved by the previous Sync control.
         {
             PlayerWindow window;
             auto *volume = window.findChild<QSlider *>("volume");
             auto *gamma = window.findChild<QSlider *>("gamma");
             auto *sync = window.findChild<QSlider *>("audioDelta");
             window.openFile(first);
-            QCOMPARE(sync->value(), 0);
+            QCOMPARE(sync->value(), -5);
+            QCOMPARE(window.findChild<ExternalAudio *>()->offset(), qint64(-250));
             volume->setValue(0);
             gamma->setValue(23);
             sync->setValue(-15);
@@ -2375,7 +2383,7 @@ private slots:
             auto *sync = window.findChild<QSlider *>("audioDelta");
             QCOMPARE(sync->value(), 10);
             QCOMPARE(window.findChild<ExternalAudio *>()->offset(), qint64(500));
-            QCOMPARE(window.findChild<QLabel *>("audioDeltaReadout")->text(), QString("Sync +0.50 s"));
+            QCOMPARE(window.findChild<QLabel *>("audioDeltaReadout")->text(), QString("Audio +0.50 s"));
             window.openFile(first);
             QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 23);

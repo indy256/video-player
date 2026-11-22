@@ -173,8 +173,7 @@ void ExternalAudio::synchronize(bool forceSeek) {
         return;
     }
     const bool playing = video->isPlaying() && video->mediaStatus() != QMediaPlayer::StalledMedia;
-    // Positive offsets delay sound; negative offsets play it ahead of video.
-    const qint64 position = video->position() - audioOffset;
+    const qint64 position = video->position() + audioOffset;
     audioInRange = position >= 0 && (audio->duration() <= 0 || position < audio->duration());
     // Stay silent before delayed audio starts and after a shorter track ends.
     if (!audioInRange) {
