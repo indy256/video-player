@@ -310,6 +310,11 @@ protected:
 };
 
 constexpr int timelineSteps = 1000000;
+
+qint64 positionAtFraction(qint64 duration, int part, int total) {
+    return qRound64(double(duration) * part / total);
+}
+
 QString timestamp(qint64 milliseconds) {
     const qint64 seconds = qMax(qint64(0), milliseconds) / 1000;
     return QString("%1:%2:%3").arg(seconds / 3600, 2, 10, QLatin1Char('0'))
@@ -609,6 +614,11 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         command("back30", "Back 30 seconds", {Qt::SHIFT | Qt::Key_Left}, [this] { skip(-30000); }),
         command("forward30", "Forward 30 seconds", {Qt::SHIFT | Qt::Key_Right}, [this] { skip(30000); })
     };
+    for (int digit = 0; digit <= 9; ++digit) {
+        new QShortcut(Qt::Key_0 + digit, this, this, [this, digit] {
+            seekFromShortcut(positionAtFraction(player->duration(), digit, 10), QString("%1%").arg(digit * 10));
+        });
+    }
     keyframes = new KeyframeIndex(this);
     keyframeSeeking = commandsMenu->addAction("Keyframe seeking");
     keyframeSeeking->setObjectName("keyframeSeeking");
@@ -1111,7 +1121,7 @@ void PlayerWindow::updateFullscreenControls() {
 void PlayerWindow::updateTimeline() {
     const qint64 duration = player->duration();
     qint64 position = player->position();
-    if (timeline->isSliderDown()) position = qRound64(timeline->value() * (double(duration) / timelineSteps));
+    if (timeline->isSliderDown()) position = positionAtFraction(duration, timeline->value(), timelineSteps);
     else {
         const QSignalBlocker blocker(timeline);
         timeline->setValue(duration > 0 ? qRound(position * (double(timelineSteps) / duration)) : 0);
@@ -1190,7 +1200,7 @@ bool PlayerWindow::frameReadyForPlayback(const QVideoFrame &frame, bool allowImp
 void PlayerWindow::seekToSlider() {
     if (player->isSeekable()) {
         const qint64 duration = player->duration();
-        const qint64 requested = qRound64(timeline->value() * (double(duration) / timelineSteps));
+        const qint64 requested = positionAtFraction(duration, timeline->value(), timelineSteps);
         const qint64 position = qBound(qint64(0),
             keyframeSeeking->isChecked() ? keyframes->seekPosition(requested) : requested, duration);
         if (!timeline->isSliderDown() || position != lastTimelinePosition || atEnd()) {
@@ -1201,17 +1211,21 @@ void PlayerWindow::seekToSlider() {
     updateTimeline();
 }
 
-void PlayerWindow::skip(qint64 delta) {
+void PlayerWindow::seekFromShortcut(qint64 position, const QString &label, bool prepareVideo) {
     if (!timeline->isEnabled()) return;
+    seekTo(position, prepareVideo);
+    showNotification(label + QStringLiteral(" — ") + timestamp(position));
+}
+
+void PlayerWindow::skip(qint64 delta) {
     const qint64 duration = player->duration();
     const qint64 requested = qBound(qint64(0), player->position() + delta, duration);
     const auto keyframe = keyframeSeeking->isChecked() && requested < duration
         ? keyframes->indexedPosition(requested, delta > 0) : std::nullopt;
     const qint64 position = requested > 0 ? qMin(keyframe.value_or(requested), duration) : requested;
     // Start the playback clock once the keyframe is ready so video doesn't race to catch up.
-    seekTo(position, !player->isPlaying() || keyframe == position);
-    showNotification(QString("%1 %2 seconds — %3")
-        .arg(delta < 0 ? "Backward" : "Forward").arg(qAbs(delta) / 1000).arg(timestamp(position)));
+    const QString label = QString("%1 %2 seconds").arg(delta < 0 ? "Backward" : "Forward").arg(qAbs(delta) / 1000);
+    seekFromShortcut(position, label, !player->isPlaying() || keyframe == position);
 }
 
 void PlayerWindow::showNotification(const QString &text) {

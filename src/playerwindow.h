@@ -62,6 +62,7 @@ private:
     void finishPendingPlayback();
     bool frameReadyForPlayback(const QVideoFrame &frame, bool allowImprecise) const;
     void seekToSlider();
+    void seekFromShortcut(qint64 position, const QString &label, bool prepareVideo = true);
     void skip(qint64 delta);
     void adjustVolume(int steps);
     void showNotification(const QString &text);

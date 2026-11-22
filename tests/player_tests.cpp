@@ -1709,6 +1709,29 @@ private slots:
         QTest::qWait(300);
         QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
     }
+    void numberKeySeeking() {
+        PlayerWindow window;
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        auto *notification = window.findChild<QLabel *>("actionNotification");
+        QTest::keyClick(&window, Qt::Key_5);
+        QVERIFY(notification->text().isEmpty());
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        QTRY_VERIFY(player->isPlaying() && window.findChild<SeekSlider *>("timeline")->isEnabled());
+        player->pause();
+        for (int digit = 0; digit <= 9; ++digit) {
+            QTest::keyClick(&window, Qt::Key(Qt::Key_0 + digit));
+            QCOMPARE(player->position(), player->duration() * digit / 10);
+            QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        }
+        QCOMPARE(notification->text(), QStringLiteral("90% — 00:00:07"));
+        window.findChild<QAction *>("playPause")->trigger();
+        QTRY_VERIFY(player->isPlaying());
+        QTest::keyClick(&window, Qt::Key_1, Qt::KeypadModifier);
+        QTRY_VERIFY(player->isPlaying() && qAbs(player->position() - player->duration() / 10) < 250);
+    }
     void keyframeArrowSeeking() {
         QSettings().remove("seeking/keyframes");
         PlayerWindow window;

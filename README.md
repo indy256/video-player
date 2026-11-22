@@ -131,6 +131,7 @@ In either track popup, click a checkbox (or press Space on the highlighted item)
 | Timeline | Click or drag to seek immediately; playback resumes when the requested frame is ready |
 | Right-click → Keyframe seeking | Toggle faster timeline and arrow seeking through keyframes; remembered across restarts |
 | Left / Right | Skip backward / forward 3 seconds |
+| 0–9 | Jump to 0%, 10%, …, 90% of the video. Press 5 for the midpoint. |
 | Shift+Left / Shift+Right | Skip backward / forward 30 seconds |
 | Volume slider | Adjust audio; set to zero to silence |
 | Gamma slider | Adjust midtones; double-click to reset to 1.0 |
