@@ -436,12 +436,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(folderPanel, &FolderPanel::fileSelected, this, &PlayerWindow::openFile);
     connect(folderPanel, &FolderPanel::contextMenuRequested, this, &PlayerWindow::showPopupMenu);
     layout->addWidget(screen, 1);
-    timeline = new SeekSlider;
-    timeline->setObjectName("timeline");
-    timeline->setAccessibleName("Video position");
-    timeline->setRange(0, timelineSteps);
-    timeline->setToolTip("Click or drag to seek");
-    timeline->installEventFilter(this);
     controlsPanel = new QWidget(page);
     controlsPanel->setObjectName("controlsPanel");
     controlsPanel->setAttribute(Qt::WA_ShowWithoutActivating);
@@ -450,7 +444,15 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     controls->setHorizontalSpacing(16);
     controls->setVerticalSpacing(4);
     controls->setColumnStretch(0, 1);
-    controls->addWidget(timeline, 0, 0, Qt::AlignVCenter);
+    const auto addSlider = [this, controls](const QString &name, const QString &title, int column) {
+        auto *slider = new SeekSlider;
+        slider->setObjectName(name);
+        slider->setAccessibleName(title);
+        if (column > 0) slider->setFixedWidth(100);
+        slider->installEventFilter(this);
+        controls->addWidget(slider, 0, column, Qt::AlignVCenter);
+        return slider;
+    };
     const auto addReadout = [controls](const QString &name, const QString &text, int column,
                                      Qt::Alignment alignment = Qt::AlignCenter) {
         auto *label = new QLabel(text);
@@ -459,46 +461,43 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         controls->addWidget(label, 1, column);
         return label;
     };
+    timeline = addSlider("timeline", "Video position", 0);
+    timeline->setRange(0, timelineSteps);
+    timeline->setToolTip("Click or drag to seek");
     timeLabel = addReadout("time", {}, 0, Qt::AlignLeft | Qt::AlignVCenter);
     timeLabel->setAccessibleName("Current and total time, video codec and resolution");
-    const auto addControlSlider = [this, controls](const QString &name, const QString &title, int column) {
-        auto *slider = new SeekSlider;
-        slider->setObjectName(name);
-        slider->setAccessibleName(title);
-        slider->setFixedWidth(100);
-        slider->installEventFilter(this);
-        controls->addWidget(slider, 0, column, Qt::AlignVCenter);
-        return slider;
-    };
-    volume = addControlSlider("volume", "Volume", 1);
+    volume = addSlider("volume", "Volume", 1);
     volume->setSingleStep(5);
     volume->setRange(0, 100);
     volume->setValue(savedVolume);
     auto *volumeLabel = addReadout("volume", QString("Volume %1").arg(savedVolume), 1);
-    gamma = addControlSlider("gamma", "Gamma", 2);
+    gamma = addSlider("gamma", "Gamma", 2);
     gamma->setRange(1, 40);
     gamma->setValue(10);
     gamma->setPageStep(5);
     auto *gammaLabel = addReadout("gamma", "Gamma 1.0", 2);
     gamma->setToolTip("Gamma 1.0 (double-click to reset)");
-    audioDelta = addControlSlider("audioDelta", "Sync", 3);
+    audioDelta = addSlider("audioDelta", "Sync", 3);
     audioDelta->setRange(-20, 20);
     audioDelta->setPageStep(10);
     audioDelta->setTickPosition(QSlider::TicksBelow);
     audioDelta->setTickInterval(20);
-    audioDelta->setValue(QSettings().value("audio/offsetMs", 0).toInt() / 50);
-    externalAudio->setOffset(audioDelta->value() * 50);
-    const auto syncText = [](int value) {
-        return QString("Sync %1%2 s").arg(value > 0 ? "+" : "")
-            .arg(value * 0.05, 0, 'f', 2);
+    constexpr int syncStepMs = 50;
+    audioDelta->setValue(QSettings().value("audio/offsetMs", 0).toInt() / syncStepMs);
+    const int initialOffsetMs = audioDelta->value() * syncStepMs;
+    externalAudio->setOffset(initialOffsetMs);
+    const auto syncText = [](int offsetMs) {
+        return QString("Sync %1%2 s").arg(offsetMs > 0 ? "+" : "")
+            .arg(offsetMs / 1000.0, 0, 'f', 2);
     };
-    auto *audioDeltaLabel = addReadout("audioDelta", syncText(audioDelta->value()), 3);
+    auto *audioDeltaLabel = addReadout("audioDelta", syncText(initialOffsetMs), 3);
     audioDelta->setToolTip("Negative: sound earlier; positive: sound later. Double-click to reset.");
     connect(audioDelta, &QSlider::valueChanged, this, [this, audioDeltaLabel, syncText](int value) {
-        const QString text = syncText(value);
+        const int offsetMs = value * syncStepMs;
+        const QString text = syncText(offsetMs);
         audioDeltaLabel->setText(text);
-        externalAudio->setOffset(value * 50);
-        QSettings().setValue("audio/offsetMs", value * 50);
+        externalAudio->setOffset(offsetMs);
+        QSettings().setValue("audio/offsetMs", offsetMs);
         showNotification(text);
     });
     auto *filesButton = new QPushButton("List");
@@ -536,11 +535,10 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QPushButton:checked { background: #33415b; border-color: #759eff; }
         QPushButton:focus { border-color: #94b4ff; }
         QPushButton:disabled { color: #596173; background: #1b202c; border-color: #252c39; }
-        QSlider { background: #171c27; border: none; border-radius: 7px; padding: 0 7px; }
-        QSlider::groove:horizontal { background: #2b3243; height: 5px; border-radius: 2px; }
-        QSlider::sub-page:horizontal { background: #759eff; border-radius: 2px; }
-        QSlider::handle:horizontal { background: #e5edff; width: 14px; margin: -5px 0; border-radius: 7px; }
-        QSlider:disabled::sub-page:horizontal { background: #2b3243; }
+        QSlider::groove:horizontal, QSlider::sub-page:horizontal { background: #2b3243; border-radius: 2px; }
+        QSlider::groove:horizontal { height: 5px; }
+        QSlider::sub-page:horizontal:enabled { background: #759eff; }
+        QSlider::handle:horizontal { background: #e5edff; width: 12px; margin: -5px 0; border-radius: 6px; }
         QToolTip { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; }
     )");
     volume->ensurePolished();
@@ -969,7 +967,7 @@ bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
         showPopupMenu(context->globalPos());
         return true;
     }
-    if ((watched == video || watched == timeline || watched == volume) && event->type() == QEvent::Wheel) {
+    if (event->type() == QEvent::Wheel && (watched == video || watched == timeline || watched == volume)) {
         wheelEvent(static_cast<QWheelEvent *>(event));
         return true;
     }
