@@ -148,8 +148,7 @@ constexpr auto popupMenuStyle = R"(
 )";
 
 void setCommandLabel(QAction *action, const QString &label) {
-    const QString shortcuts = action->data().toString();
-    action->setText(shortcuts.isEmpty() ? label : label + '\t' + shortcuts);
+    action->setText(label + '\t' + action->data().toString());
 }
 
 class TrackMenu final : public QMenu {
@@ -582,33 +581,33 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
                           const QList<QKeySequence> &keys, auto callback) {
         auto *action = commandsMenu->addAction(label, this, callback);
         action->setObjectName(name);
-        QStringList shortcuts;
-        for (const auto &key : keys) {
-            shortcuts.append(key.toString(QKeySequence::NativeText));
-            auto *shortcut = new QShortcut(key, this);
+        if (!keys.isEmpty()) {
+            auto *shortcut = new QShortcut(this);
+            shortcut->setKeys(keys);
             connect(shortcut, &QShortcut::activated, this, callback);
+
+            QStringList labels;
+            for (const auto &key : keys) labels.append(key.toString(QKeySequence::NativeText));
+            action->setData(labels.join(" / "));
+            setCommandLabel(action, label);
         }
-        // Display the keys without registering a second shortcut on the menu action.
-        action->setData(shortcuts.join(" / "));
-        setCommandLabel(action, label);
         return action;
     };
-    command("openVideo", "Open video", {QKeySequence::Open}, &PlayerWindow::chooseFile);
+    command("openVideo", "Open video", {Qt::Key_O}, &PlayerWindow::chooseFile);
     auto *saveVideos = commandsMenu->addAction("Save videos to...");
     saveVideos->setObjectName("saveVideos");
-    command("folderFiles", "Show/hide folder files", {QKeySequence(Qt::Key_L)}, [filesButton] {
+    command("folderFiles", "Show/hide folder files", {Qt::Key_L}, [filesButton] {
         filesButton->click();
     });
-    auto *play = command("playPause", "Play", {QKeySequence(Qt::Key_Space)}, &PlayerWindow::togglePlayback);
+    auto *play = command("playPause", "Play", {Qt::Key_Space}, &PlayerWindow::togglePlayback);
     auto *fullscreen = command("fullscreen", "Fullscreen",
-        {QKeySequence(Qt::Key_Return), QKeySequence(Qt::Key_Enter),
-         QKeySequence(Qt::Key_F), QKeySequence(Qt::Key_F11)}, &PlayerWindow::toggleFullscreen);
+        {Qt::Key_Return, Qt::Key_Enter, Qt::Key_F, Qt::Key_F11}, &PlayerWindow::toggleFullscreen);
     commandsMenu->addSeparator();
     const QList<QAction *> seeking{
-        command("back3", "Back 3 seconds", {QKeySequence(Qt::Key_Left)}, [this] { skip(-3000); }),
-        command("forward3", "Forward 3 seconds", {QKeySequence(Qt::Key_Right)}, [this] { skip(3000); }),
-        command("back30", "Back 30 seconds", {QKeySequence(Qt::SHIFT | Qt::Key_Left)}, [this] { skip(-30000); }),
-        command("forward30", "Forward 30 seconds", {QKeySequence(Qt::SHIFT | Qt::Key_Right)}, [this] { skip(30000); })
+        command("back3", "Back 3 seconds", {Qt::Key_Left}, [this] { skip(-3000); }),
+        command("forward3", "Forward 3 seconds", {Qt::Key_Right}, [this] { skip(3000); }),
+        command("back30", "Back 30 seconds", {Qt::SHIFT | Qt::Key_Left}, [this] { skip(-30000); }),
+        command("forward30", "Forward 30 seconds", {Qt::SHIFT | Qt::Key_Right}, [this] { skip(30000); })
     };
     keyframes = new KeyframeIndex(this);
     keyframeSeeking = commandsMenu->addAction("Keyframe seeking");
@@ -629,16 +628,16 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(timeline, &QSlider::sliderPressed, this, [this] { lastTimelinePosition = -1; });
     commandsMenu->addSeparator();
     const QList<QAction *> tracks{
-        command("nextAudio", "Next enabled audio track", {QKeySequence(Qt::Key_A)}, [this] { chooseTrack(true, true); }),
-        command("audioTracks", "Audio tracks...", {QKeySequence(Qt::SHIFT | Qt::Key_A)}, [this] { chooseTrack(true); }),
-        command("nextSubtitles", "Next enabled subtitle track", {QKeySequence(Qt::Key_S)}, [this] { chooseTrack(false, true); }),
-        command("subtitles", "Subtitles...", {QKeySequence(Qt::SHIFT | Qt::Key_S)}, [this] { chooseTrack(false); })
+        command("nextAudio", "Next enabled audio track", {Qt::Key_A}, [this] { chooseTrack(true, true); }),
+        command("audioTracks", "Audio tracks...", {Qt::SHIFT | Qt::Key_A}, [this] { chooseTrack(true); }),
+        command("nextSubtitles", "Next enabled subtitle track", {Qt::Key_S}, [this] { chooseTrack(false, true); }),
+        command("subtitles", "Subtitles...", {Qt::SHIFT | Qt::Key_S}, [this] { chooseTrack(false); })
     };
     commandsMenu->addSeparator();
-    command("volumeUp", "Volume up", {QKeySequence(Qt::Key_Up)}, [this] { adjustVolume(1); });
-    command("volumeDown", "Volume down", {QKeySequence(Qt::Key_Down)}, [this] { adjustVolume(-1); });
-    command("gammaDown", "Decrease gamma by 0.1", {QKeySequence(Qt::Key_W)}, [this] { gamma->setValue(gamma->value() - 1); });
-    command("gammaUp", "Increase gamma by 0.1", {QKeySequence(Qt::Key_E)}, [this] { gamma->setValue(gamma->value() + 1); });
+    command("volumeUp", "Volume up", {Qt::Key_Up}, [this] { adjustVolume(1); });
+    command("volumeDown", "Volume down", {Qt::Key_Down}, [this] { adjustVolume(-1); });
+    command("gammaDown", "Decrease gamma by 0.1", {Qt::Key_W}, [this] { gamma->setValue(gamma->value() - 1); });
+    command("gammaUp", "Increase gamma by 0.1", {Qt::Key_E}, [this] { gamma->setValue(gamma->value() + 1); });
     command("resetGamma", "Reset gamma to 1.0", {}, [this] { gamma->setValue(10); });
     commandsMenu->addSeparator();
     command("registerFileTypes", "Register file types", {}, [this] {
@@ -668,7 +667,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         }
     });
     commandsMenu->addSeparator();
-    command("exit", "Exit", {QKeySequence(Qt::Key_Escape)}, &PlayerWindow::close);
+    command("exit", "Exit", {Qt::Key_Escape}, &PlayerWindow::close);
     connect(commandsMenu, &QMenu::aboutToShow, this, [this, play, fullscreen, seeking, tracks, update] {
         setCommandLabel(play, (pendingPlayback ? pendingPlayback->play : player->isPlaying()) ? "Pause" : "Play");
         setCommandLabel(fullscreen, isFullScreen() ? "Leave fullscreen" : "Fullscreen");

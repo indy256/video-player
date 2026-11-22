@@ -120,7 +120,7 @@ In either track popup, click a checkbox (or press Space on the highlighted item)
 
 | Control | Action |
 | --- | --- |
-| Right-click → Open video / Ctrl+O | Choose a local file |
+| Right-click → Open video / O | Choose a local file |
 | Space | Play or pause |
 | A (Shift+A) | Choose an embedded audio track or a matching audio file beside the video |
 | S (Shift+S) | Choose embedded subtitles or an `.srt` file in the video's folder; select Off to hide subtitles |

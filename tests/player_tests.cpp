@@ -281,12 +281,16 @@ private slots:
                 QVERIFY(menu.findChild<QAction *>("registerFileTypes")->isEnabled());
                 for (const auto &name : {"playPause", "back3", "forward30", "audioTracks", "subtitles"})
                     QVERIFY(!menu.findChild<QAction *>(name)->isEnabled());
-                QCOMPARE(menu.findChild<QAction *>("nextAudio")->text().section('\t', 1), QString("A"));
-                QCOMPARE(menu.findChild<QAction *>("audioTracks")->text().section('\t', 1),
-                    QKeySequence(Qt::SHIFT | Qt::Key_A).toString(QKeySequence::NativeText));
-                QCOMPARE(menu.findChild<QAction *>("nextSubtitles")->text().section('\t', 1), QString("S"));
-                QCOMPARE(menu.findChild<QAction *>("subtitles")->text().section('\t', 1),
-                    QKeySequence(Qt::SHIFT | Qt::Key_S).toString(QKeySequence::NativeText));
+                const auto checkShortcut = [&](const char *name, QKeySequence key) {
+                    auto *action = menu.findChild<QAction *>(name);
+                    QVERIFY(action);
+                    QCOMPARE(action->text().section('\t', 1), key.toString(QKeySequence::NativeText));
+                };
+                checkShortcut("openVideo", Qt::Key_O);
+                checkShortcut("nextAudio", Qt::Key_A);
+                checkShortcut("audioTracks", Qt::SHIFT | Qt::Key_A);
+                checkShortcut("nextSubtitles", Qt::Key_S);
+                checkShortcut("subtitles", Qt::SHIFT | Qt::Key_S);
                 QTest::keyClick(&menu, Qt::Key_Escape);
             }));
             QVERIFY(window.isVisible());
