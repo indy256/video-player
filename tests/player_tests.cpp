@@ -1216,6 +1216,49 @@ private slots:
         QTRY_VERIFY(subtitleText(window).isEmpty());
         QVERIFY(reader->source().isEmpty());
     }
+    void lacedAudioSeekExample() {
+        const QString path = qEnvironmentVariable("VIDEO_PLAYER_LACED_AUDIO_EXAMPLE");
+        if (path.isEmpty()) QSKIP("Requires a local Matroska file with continuous laced audio");
+        verifyIndexedAudioSeek(path);
+    }
+    void aviAudioSeekExample() {
+        const QString path = qEnvironmentVariable("VIDEO_PLAYER_AVI_AUDIO_EXAMPLE");
+        if (path.isEmpty()) QSKIP("Requires a local indexed AVI with continuous audio");
+        verifyIndexedAudioSeek(path);
+    }
+private:
+    void verifyIndexedAudioSeek(const QString &path) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        PlayerWindow window;
+        window.show();
+        window.findChild<QAction *>("keyframeSeeking")->setChecked(true);
+        window.findChild<QSlider *>("audioDelta")->setValue(0);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *timeline = window.findChild<SeekSlider *>("timeline");
+        auto *index = window.findChild<KeyframeIndex *>();
+        QAudioBufferOutput buffers;
+        player->setAudioBufferOutput(&buffers);
+        window.openFile(path);
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && index->isReady(), 15000);
+        for (int percent : {73, 14, 53, 27, 89, 43, 18, 70}) {
+            const int value = timeline->maximum() * percent / 100;
+            const qint64 target = index->seekPosition(qRound64(value * (double(player->duration())
+                / timeline->maximum()))) * 1000;
+            bool heardTarget = false;
+            QObject observer;
+            connect(&buffers, &QAudioBufferOutput::audioBufferReceived, &observer,
+                    [&](const QAudioBuffer &buffer) {
+                if (buffer.isValid() && buffer.startTime() <= target
+                    && buffer.startTime() + buffer.duration() > target) heardTarget = true;
+            });
+            timeline->setValue(value);
+            QTRY_VERIFY_WITH_TIMEOUT(heardTarget, 3000);
+        }
+#else
+        QSKIP("Audio buffer monitoring requires Qt 6.8");
+#endif
+    }
+private slots:
     void audioSeekingMovieExample() {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
         const QString path = qEnvironmentVariable("VIDEO_PLAYER_AUDIO_SEEK_EXAMPLE");
@@ -1640,6 +1683,22 @@ private slots:
         QTest::qWait(300);
         QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
     }
+    void slowSeekResumesAudio() {
+        PlayerWindow window;
+        window.openFile(clip);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *slider = window.findChild<SeekSlider *>("timeline");
+        QTRY_VERIFY(player->isPlaying() && player->hasAudio());
+        // Simulate slow video preparation by withholding frame notifications.
+        const QSignalBlocker blocked(window.findChild<VideoSurface *>());
+        slider->setValue(slider->maximum() / 4);
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 800);
+        slider->setValue(slider->maximum() / 2);
+        window.findChild<QAction *>("playPause")->trigger();
+        QTest::qWait(300);
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+    }
     void keyframeArrowSeeking() {
         QSettings().remove("seeking/keyframes");
         PlayerWindow window;
@@ -1675,11 +1734,25 @@ private slots:
         QTest::keyClick(&window, Qt::Key_Right);
         QCOMPARE(player->position(), qint64(5350));
         mode->trigger();
-        player->setPosition(1000);
+        player->setPosition(4500);
         player->play();
         QTest::keyClick(&window, Qt::Key_Right);
+        QVERIFY(qAbs(player->position() - 7500) < 100);
+        QVERIFY(player->isPlaying());
+
+        auto *video = window.findChild<VideoSurface *>();
+        qint64 resumedFrame = -1;
+        QObject observer;
+        connect(player, &QMediaPlayer::playingChanged, &observer, [&](bool playing) {
+            if (playing) resumedFrame = video->videoSink()->videoFrame().startTime() / 1000;
+        });
+        player->setPosition(5350);
+        QTest::keyClick(&window, Qt::Key_Left);
+        QCOMPARE(player->position(), qint64(2000));
+        QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
         QTRY_VERIFY(player->isPlaying());
-        QVERIFY(player->position() >= 4000);
+        QVERIFY(qAbs(resumedFrame - 2000) < 80);
+        QTRY_VERIFY(player->position() > 2100);
         mode->trigger();
         QSettings().remove("seeking/keyframes");
     }
@@ -1694,6 +1767,7 @@ private slots:
         QTest::newRow("mp4-no-b-frames") << QString("mp4") << 0 << 0 << false;
         QTest::newRow("mp4-start-offset") << QString("mp4") << 2 << 2 << false;
         QTest::newRow("mp4-signed-composition-offsets") << QString("mp4") << 2 << 0 << true;
+        QTest::newRow("avi-b-frames") << QString("avi") << 2 << 0 << false;
         QTest::newRow("avi-index") << QString("avi") << 0 << 0 << false;
     }
     void containerKeyframeIndex() {
@@ -1713,9 +1787,11 @@ private slots:
         KeyframeIndex index;
         QVERIFY(loadIndex(index, file));
         QVERIFY(index.isReady());
-        QCOMPARE(index.seekPosition(2350), qint64(2000));
-        QCOMPARE(index.seekPosition(2350, true), qint64(3000));
-        QCOMPARE(index.seekPosition(7350), qint64(7000));
+        // This AVI stores its reordered GOPs two decode ticks before each second.
+        const int decodeLead = suffix == "avi" && bFrames ? 83 : 0;
+        QCOMPARE(index.seekPosition(2350), qint64(2000 - decodeLead));
+        QCOMPARE(index.seekPosition(2350, true), qint64(3000 - decodeLead));
+        QCOMPARE(index.seekPosition(7350), qint64(7000 - decodeLead));
         QVERIFY(index.bytesRead() <= 8 * 1024 * 1024);
     }
     void mp4IndexSkipsKeyframePayloads() {
@@ -1915,7 +1991,10 @@ private slots:
         QSettings().remove("seeking/keyframes");
         PlayerWindow window;
         window.show();
-        window.openFile(clip);
+        const QString silent = temp.filePath("video-only.mp4");
+        QCOMPARE(QProcess::execute("ffmpeg", {"-loglevel", "error", "-y", "-i", clip,
+            "-an", "-c:v", "copy", silent}), 0);
+        window.openFile(silent);
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
         auto *video = window.findChild<VideoSurface *>();
         auto *slider = window.findChild<SeekSlider *>("timeline");

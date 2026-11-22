@@ -56,10 +56,10 @@ private:
     void togglePlayback();
     void updateControls();
     void updateTimeline();
-    qint64 keyframePosition(qint64 position, bool forward = false) const;
     bool atEnd() const;
     void seekTo(qint64 position, bool prepareVideo = true);
     void cancelPendingPlayback();
+    void finishPendingPlayback();
     bool frameReadyForPlayback(const QVideoFrame &frame, bool allowImprecise) const;
     void seekToSlider();
     void skip(qint64 delta);
@@ -85,6 +85,7 @@ private:
     qint64 lastTimelinePosition = -1;
     QTimer *clickTimer;
     QTimer *resumeTimer;
+    QTimer *seekAudioTimer;
     QSlider *volume;
     QSlider *gamma = nullptr;
     QSlider *audioDelta = nullptr;

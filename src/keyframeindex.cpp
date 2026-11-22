@@ -277,6 +277,7 @@ QList<qint64> readKeyframes(const QUrl &source, qint64 &bytesRead) {
     const QByteArray container(context->iformat->name);
     const bool matroska = container.contains("matroska");
     const bool avi = container == "avi";
+    const bool mov = container.contains("mov");
     // Load deferred Matroska Cues before probing packets can build a partial
     // index. A timestamp preceding the stream lets native seeking clamp to its
     // first cue, but makes generic seeking fail when there is no stored index.
@@ -300,35 +301,31 @@ QList<qint64> readKeyframes(const QUrl &source, qint64 &bytesRead) {
     if (entries.isEmpty()) return {};
     // Establish the same presentation-time origin used by normal playback.
     if (avformat_find_stream_info(context, nullptr) < 0 || input.cancelled()) return {};
-    const auto movOffsets = container.contains("mov")
-        ? movKeyframeOffsets(input, stream, count, entries) : std::nullopt;
+    const auto movOffsets = mov ? movKeyframeOffsets(input, stream, count, entries) : std::nullopt;
     qint64 movCorrection = 0;
     const double milliseconds = 1000.0 * stream->time_base.num / stream->time_base.den;
     const double origin = context->start_time == AV_NOPTS_VALUE ? 0 : context->start_time / 1000.0;
     QList<qint64> result;
-    AVPacket *packet = av_packet_alloc();
-    if (!packet) return {};
+    AVPacket *packet = mov ? av_packet_alloc() : nullptr;
+    if (mov && !packet) return {};
     const auto freePacket = qScopeGuard([&] { av_packet_free(&packet); });
     for (qsizetype i = 0; i < entries.size(); ++i) {
         const auto &entry = entries[i];
         if (input.cancelled()) return {};
+        // AVI seeks use native index timestamps, including Xvid key packets without PTS.
         qint64 timestamp = entry.timestamp;
         if (movOffsets && i > 0) {
             if (qAddOverflow(entry.timestamp, (*movOffsets)[i], &timestamp)
                 || qAddOverflow(timestamp, movCorrection, &timestamp)) return {};
-        } else if (!matroska) {
-            // MOV/AVI indexes can contain decode timestamps. Read only the
-            // indexed key packet to preserve presentation timestamps with B-frames.
+        } else if (mov) {
+            // MOV indexes can contain decode timestamps. Read the key packet for its PTS.
             if (av_seek_frame(context, video, entry.timestamp, AVSEEK_FLAG_BACKWARD) < 0) return {};
-            // AVI entries point at the chunk header, packets at its payload.
-            if (avi && (entry.pos < 0 || entry.pos > input.file.size() - 8)) return {};
-            const int64_t packetPosition = entry.pos + (avi ? 8 : 0);
             for (;;) {
                 av_packet_unref(packet);
                 if (input.cancelled() || av_read_frame(context, packet) < 0) return {};
                 if (packet->stream_index != video) continue;
-                if (packet->pos > packetPosition) return {};
-                if (packet->pos == packetPosition && (packet->flags & AV_PKT_FLAG_KEY)
+                if (packet->pos > entry.pos) return {};
+                if (packet->pos == entry.pos && (packet->flags & AV_PKT_FLAG_KEY)
                     && packet->pts != AV_NOPTS_VALUE) break;
             }
             timestamp = packet->pts;
@@ -384,11 +381,12 @@ void KeyframeIndex::load() {
     job->start(QThread::LowPriority);
 }
 
-qint64 KeyframeIndex::seekPosition(qint64 requested, bool forward) const {
-    if (positions.isEmpty()) return requested;
+std::optional<qint64> KeyframeIndex::indexedPosition(qint64 requested, bool forward) const {
+    if (positions.isEmpty()) return std::nullopt;
     if (forward) {
         const auto next = std::lower_bound(positions.cbegin(), positions.cend(), requested);
-        return next == positions.cend() ? requested : *next;
+        if (next == positions.cend()) return std::nullopt;
+        return *next;
     }
     const auto next = std::upper_bound(positions.cbegin(), positions.cend(), requested);
     return next == positions.cbegin() ? positions.first() : *std::prev(next);

@@ -22,22 +22,33 @@ def main():
     builder.ffmpeg_sdk(SimpleNamespace(version=QT_VERSION, work=args.work,
         seed=args.qt_root, toolchain="msvc", arch=args.arch))
     sources = {
+        "playbackengine/qffmpegaudiorenderer.cpp": "b942af84abeed8a2effb256cf9aced0325421fdcb1c5599799be2eb0ba855a31",
+        "playbackengine/qffmpegdemuxer.cpp": "73e8e6763142aafe61e0b717632dfd5ef4a56cd2ec7591023c77c7be12e81ebd",
         "qffmpeghwaccel_d3d11.cpp": "2a2de8a7df485a1ff26f5d68345ce9d0baa4ea1a1b57ff2400851e815a81d1ed",
         "qffmpegplugin.cpp": "0ec3f8bbde614c2a4f4202042f77fbbcda51065a7c7996bf47f6b2678a224827",
         "ffmpeg.json": "b1bef03e0c3aeac3a5f0dac7d85fed68fa390317cd6f15e6f715108269634f02",
     }
     upstream = args.work / "upstream"
     upstream.mkdir(exist_ok=True)
-    for name, checksum in sources.items():
-        path = upstream / name
+    playback_patches = {
+        "qffmpegaudiorenderer": builder.fix_windows_audio_sink_seek,
+        "qffmpegdemuxer": builder.fix_audio_seek,
+    }
+    for source, checksum in sources.items():
+        path = upstream / Path(source).name
         if not path.exists():
             urllib.request.urlretrieve(
                 f"https://raw.githubusercontent.com/qt/qtmultimedia/v{QT_VERSION}/"
-                "src/plugins/multimedia/ffmpeg/" + name, path)
+                f"src/plugins/multimedia/ffmpeg/{source}", path)
         if hashlib.sha256(path.read_bytes()).hexdigest() != checksum:
             raise RuntimeError(f"Qt source checksum mismatch: {path}")
         content = path.read_text(encoding="utf-8")
-        if name == "qffmpeghwaccel_d3d11.cpp":
+        if path.stem in playback_patches:
+            content = playback_patches[path.stem](content)
+            header = f"{path.stem}_p.h"
+            content = content.replace(f'"playbackengine/{header}"', f'"{header}"')
+            content = content.replace(f'#include "moc_{path.stem}_p.cpp"', "")
+        elif path.name == "qffmpeghwaccel_d3d11.cpp":
             content = builder.fix_d3d11(content)
             anchor = "AVFrameUPtr copyFromHwPoolD3D11(AVFrameUPtr src)"
             allocation = "    AVFrameUPtr dest = makeAVFrame();"
@@ -49,7 +60,7 @@ def main():
                 '    if (auto scaled = scaler.scale(src.get(),\n'
                 '            qEnvironmentVariableIntValue("VIDEO_PLAYER_GPU_MAX_WIDTH")))\n'
                 '        return scaled;\n\n' + allocation)
-        target = args.work / name
+        target = args.work / path.name
         if not target.exists() or target.read_text(encoding="utf-8") != content:
             target.write_text(content, encoding="utf-8")
 

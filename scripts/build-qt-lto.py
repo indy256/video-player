@@ -192,6 +192,48 @@ def fix_d3d11(content):
     return content
 
 
+def fix_audio_seek(content):
+    if '#include "matroskaaudiopreroll.h"' in content:
+        return content
+    position = "m_sessionCtx.posInLoopUs" if "m_sessionCtx.posInLoopUs" in content else "m_posInLoopUs"
+    read = re.search(r"av_read_frame\(m_context, ([^;\n]+)\);", content)
+    seek = "av_seek_frame(m_context, -1, seekPos.get(), AVSEEK_FLAG_BACKWARD)"
+    if not read or content.count(seek) != 1:
+        raise RuntimeError("Unrecognized Qt demuxer seek implementation")
+    content = content.replace("#include <chrono>", '#include <chrono>\n#include "matroskaaudiopreroll.h"')
+    target = f"toContextPosition({position}, m_context).get()"
+    content = content.replace(read[0], f"readWithAudioPreroll(m_context, {read[1]}, {target}, *this);")
+    return content.replace(seek,
+        "seekWithAudioPreroll(m_context, seekPos.get(),\n"
+        "            std::any_of(m_streams.begin(), m_streams.end(), [](const auto &entry) {\n"
+        "                return entry.second.trackType == QPlatformMediaPlayer::AudioStream;\n            }), *this)")
+
+
+def fix_windows_audio_sink_seek(content):
+    signature = "void AudioRenderer::seekInternal()\n{"
+    if signature not in content:
+        return content  # Older Qt versions recreate the renderer when seeking.
+    start = content.index(signature) + len(signature)
+    end = content.index("\n}", start)
+    return content[:start] + """
+    // Keep a short WASAPI queue playing while the first new samples are prepared.
+    const bool keepSink = m_sink && m_ioDevice && !m_deviceChanged
+            && (m_sink->state() == QAudio::IdleState
+                || (m_sink->state() == QAudio::ActiveState
+                    && durationForBytes(m_sink->bufferSize() - m_sink->bytesFree())
+                            <= DesiredBufferTime));
+    if (!keepSink) {
+        if (m_sink)
+            m_sink->reset();
+        m_ioDevice = nullptr;
+    }
+    m_firstFrameToSink = true;
+    m_bufferLoadingInfo = {};
+    m_audioFrameConverter.reset();
+    m_bufferOutputResampler.reset();
+    m_sessionCtx = {};""" + content[end:]
+
+
 def patch_msvc_multimedia(src):
     # QPlaybackOptions' inline move operations can reference its shared-data
     # destructor from QtMultimediaQuick. Qt 6.10/6.11 omit the DLL export on
@@ -290,7 +332,12 @@ def main():
                 patch_mingw(src)
                 options += [f"-DCMAKE_PROJECT_QtBase_INCLUDE={(SCRIPTS / 'qt-mingw-lto.cmake').as_posix()}"]
         if module == "qtmultimedia":
+            demuxer = src / "src/plugins/multimedia/ffmpeg/playbackengine/qffmpegdemuxer.cpp"
+            shutil.copyfile(SCRIPTS / "matroskaaudiopreroll.h", demuxer.with_name("matroskaaudiopreroll.h"))
+            demuxer.write_text(fix_audio_seek(demuxer.read_text()))
             if args.toolchain in ("msvc", "mingw"):
+                audio = demuxer.with_name("qffmpegaudiorenderer.cpp")
+                audio.write_text(fix_windows_audio_sink_seek(audio.read_text()))
                 d3d11 = src / "src/plugins/multimedia/ffmpeg/qffmpeghwaccel_d3d11.cpp"
                 d3d11.write_text(fix_d3d11(d3d11.read_text()))
             if args.toolchain == "msvc":

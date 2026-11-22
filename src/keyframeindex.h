@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QList>
 #include <QUrl>
+#include <optional>
 
 // Read container seek tables independently of playback, with bounded I/O.
 class KeyframeIndex : public QObject {
@@ -13,7 +14,10 @@ public:
     void load();
     bool isReady() const { return !positions.isEmpty(); }
     qint64 bytesRead() const { return readBytes; }
-    qint64 seekPosition(qint64 requested, bool forward = false) const;
+    std::optional<qint64> indexedPosition(qint64 requested, bool forward = false) const;
+    qint64 seekPosition(qint64 requested, bool forward = false) const {
+        return indexedPosition(requested, forward).value_or(requested);
+    }
 signals:
     void finished(bool available);
 private:

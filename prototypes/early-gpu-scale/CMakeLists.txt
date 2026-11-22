@@ -3,6 +3,8 @@ if(NOT WIN32 OR NOT MSVC OR NOT Qt6_VERSION VERSION_EQUAL "6.11.2")
     message(FATAL_ERROR "Early GPU scaling requires Windows, MSVC, and Qt 6.11.2")
 endif()
 find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    prepare.py "${PROJECT_SOURCE_DIR}/scripts/build-qt-lto.py")
 get_filename_component(qt_root "${Qt6_DIR}/../../.." ABSOLUTE)
 string(TOLOWER "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}" scale_arch)
 if(NOT scale_arch STREQUAL "arm64" AND NOT scale_arch STREQUAL "x64")
@@ -13,12 +15,18 @@ execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/pre
     COMMAND_ERROR_IS_FATAL ANY)
 set(FFMPEG_DIR "${CMAKE_CURRENT_BINARY_DIR}/ffmpeg-sdk")
 find_package(Qt6 REQUIRED COMPONENTS FFmpegMediaPluginImplPrivate)
+set(ffmpeg_private_headers "${qt_root}/include/QtFFmpegMediaPluginImpl/${Qt6_VERSION}/QtFFmpegMediaPluginImpl/private")
 qt_add_plugin(early_scale_ffmpeg SHARED CLASS_NAME QFFmpegMediaPlugin
     PLUGIN_TYPE multimedia OUTPUT_NAME ffmpegmediaplugin
     "${CMAKE_CURRENT_BINARY_DIR}/qffmpegplugin.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/qffmpegdemuxer.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/qffmpegaudiorenderer.cpp"
+    "${ffmpeg_private_headers}/qffmpegaudiorenderer_p.h"
+    "${ffmpeg_private_headers}/qffmpegdemuxer_p.h"
     "${CMAKE_CURRENT_BINARY_DIR}/qffmpeghwaccel_d3d11.cpp")
 target_include_directories(early_scale_ffmpeg PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${qt_root}/include/QtFFmpegMediaPluginImpl/${Qt6_VERSION}/QtFFmpegMediaPluginImpl/private")
+    "${PROJECT_SOURCE_DIR}/scripts"
+    "${ffmpeg_private_headers}")
 target_link_libraries(early_scale_ffmpeg PRIVATE Qt6::FFmpegMediaPluginImplPrivate d3d11 dxgi dxguid)
 target_compile_options(early_scale_ffmpeg PRIVATE /utf-8)
 set_target_properties(early_scale_ffmpeg PROPERTIES

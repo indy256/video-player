@@ -400,6 +400,11 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     connect(overlayTimer, &QTimer::timeout, this, &PlayerWindow::updateOverlays);
     connect(notificationTimer, &QTimer::timeout, this, &PlayerWindow::updateOverlays);
     resumeTimer = new QTimer(this);
+    seekAudioTimer = new QTimer(this);
+    seekAudioTimer->setSingleShot(true);
+    connect(seekAudioTimer, &QTimer::timeout, this, [this] {
+        if (pendingPlayback && pendingPlayback->play) finishPendingPlayback();
+    });
     resumeTimer->setSingleShot(true);
     connect(resumeTimer, &QTimer::timeout, this, [this] {
         if (!pendingPlayback) return;
@@ -410,9 +415,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
             if (pendingPlayback->position && frame.isValid()) resumeTimer->start(1000);
             return;
         }
-        const bool play = pendingPlayback->play;
-        cancelPendingPlayback();
-        if (play) player->play();
+        finishPendingPlayback();
     });
     connect(video, &VideoSurface::videoFrameChanged, this, [this] {
         // Prepare the first frame before starting the audio/playback clock. Otherwise
@@ -1133,11 +1136,6 @@ void PlayerWindow::updateTimeline() {
     }
 }
 
-qint64 PlayerWindow::keyframePosition(qint64 position, bool forward) const {
-    if (keyframeSeeking->isChecked()) position = keyframes->seekPosition(position, forward);
-    return qBound(qint64(0), position, player->duration());
-}
-
 bool PlayerWindow::atEnd() const {
     return player->mediaStatus() == QMediaPlayer::EndOfMedia
         || (player->duration() > 0 && player->position() >= player->duration());
@@ -1153,6 +1151,10 @@ void PlayerWindow::seekTo(qint64 position, bool prepareVideo) {
     if (prepare) {
         pendingPlayback = PlaybackRequest{playing, position};
         player->pause();
+        // A precise jump deep inside a GOP can take seconds to decode. Give video
+        // a head start, then let the audio renderer run as soon as it has samples.
+        if (playing && (player->hasAudio() || !externalAudio->filePath().isEmpty()))
+            seekAudioTimer->start(120);
     }
     embeddedSubtitles->seek();
     externalAudio->seek(position);
@@ -1161,12 +1163,19 @@ void PlayerWindow::seekTo(qint64 position, bool prepareVideo) {
 
 void PlayerWindow::cancelPendingPlayback() {
     resumeTimer->stop();
+    seekAudioTimer->stop();
     pendingPlayback.reset();
+}
+
+void PlayerWindow::finishPendingPlayback() {
+    const bool play = pendingPlayback->play;
+    cancelPendingPlayback();
+    if (play) player->play();
 }
 
 bool PlayerWindow::frameReadyForPlayback(const QVideoFrame &frame, bool allowImprecise) const {
     if (!frame.isValid() || (pendingPosition && player->isSeekable())) return false;
-    if (!pendingPlayback || !pendingPlayback->position || allowImprecise) return true;
+    if (!pendingPlayback->position || allowImprecise) return true;
     // Old frames can still arrive after another movement of the seek slider.
     // Only the frame at the latest target may restart the playback clock.
     const qint64 start = frame.startTime();
@@ -1181,8 +1190,10 @@ bool PlayerWindow::frameReadyForPlayback(const QVideoFrame &frame, bool allowImp
 
 void PlayerWindow::seekToSlider() {
     if (player->isSeekable()) {
-        const qint64 position = keyframePosition(
-            qRound64(timeline->value() * (double(player->duration()) / timelineSteps)));
+        const qint64 duration = player->duration();
+        const qint64 requested = qRound64(timeline->value() * (double(duration) / timelineSteps));
+        const qint64 position = qBound(qint64(0),
+            keyframeSeeking->isChecked() ? keyframes->seekPosition(requested) : requested, duration);
         if (!timeline->isSliderDown() || position != lastTimelinePosition || atEnd()) {
             lastTimelinePosition = position;
             seekTo(position);
@@ -1193,10 +1204,13 @@ void PlayerWindow::seekToSlider() {
 
 void PlayerWindow::skip(qint64 delta) {
     if (!timeline->isEnabled()) return;
-    qint64 position = qBound(qint64(0), player->position() + delta, player->duration());
-    if (position > 0 && position < player->duration()) position = keyframePosition(position, delta > 0);
-    // Playing skips need not wait for video decoding before resuming audio.
-    seekTo(position, !player->isPlaying());
+    const qint64 duration = player->duration();
+    const qint64 requested = qBound(qint64(0), player->position() + delta, duration);
+    const auto keyframe = keyframeSeeking->isChecked() && requested < duration
+        ? keyframes->indexedPosition(requested, delta > 0) : std::nullopt;
+    const qint64 position = requested > 0 ? qMin(keyframe.value_or(requested), duration) : requested;
+    // Start the playback clock once the keyframe is ready so video doesn't race to catch up.
+    seekTo(position, !player->isPlaying() || keyframe == position);
     showNotification(QString("%1 %2 seconds — %3")
         .arg(delta < 0 ? "Backward" : "Forward").arg(qAbs(delta) / 1000).arg(timestamp(position)));
 }
