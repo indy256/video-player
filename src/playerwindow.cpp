@@ -492,21 +492,22 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     audioDelta->setToolTip("Move left to delay audio or right to advance it. Double-click to reset.");
     auto *audioDeltaLabel = addReadout("audioDelta", {}, 3);
     constexpr int timingStepMs = 50;
-    const auto applyAudioOffset = [this, audioDeltaLabel](int steps, bool save) {
-        const int leadMs = steps * timingStepMs;
-        const QString text = leadMs == 0 ? QStringLiteral("Audio in sync")
-                                         : QString::asprintf("Audio %+.2f s", leadMs / 1000.0);
+    static constexpr char delaySetting[] = "audio/offsetMs";
+    const auto applyAudioOffset = [this, audioDeltaLabel] {
+        const int leadMs = audioDelta->value() * timingStepMs;
+        const QString offset = leadMs == 0 ? QStringLiteral("in sync") : QString::asprintf("%+.2f s", leadMs / 1000.0);
         externalAudio->setOffset(leadMs);
-        audioDeltaLabel->setText(text);
-        if (save) {
-            QSettings().setValue("audio/offsetMs", -leadMs);
-            showNotification(text);
-        }
+        audioDeltaLabel->setText(QStringLiteral("Audio Δ ") + offset);
+        return leadMs;
     };
-    // The saved setting measures delay. Keep existing corrections when displaying audio lead.
-    audioDelta->setValue(-(QSettings().value("audio/offsetMs", 0).toInt() / timingStepMs));
-    applyAudioOffset(audioDelta->value(), false);
-    connect(audioDelta, &QSlider::valueChanged, this, [applyAudioOffset](int steps) { applyAudioOffset(steps, true); });
+    // The saved setting measures delay, the inverse of the displayed lead.
+    audioDelta->setValue(-(QSettings().value(delaySetting, 0).toInt() / timingStepMs));
+    applyAudioOffset();
+    connect(audioDelta, &QSlider::valueChanged, this, [this, applyAudioOffset, audioDeltaLabel] {
+        const int leadMs = applyAudioOffset();
+        QSettings().setValue(delaySetting, -leadMs);
+        showNotification(audioDeltaLabel->text());
+    });
     auto *filesButton = new QPushButton("List");
     filesButton->setObjectName("folderFilesButton");
     filesButton->setCheckable(true);
