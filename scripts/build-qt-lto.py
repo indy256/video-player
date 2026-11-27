@@ -1,6 +1,7 @@
 """Build the player's Qt modules with LTO from checksum-pinned sources.
 
 Requires Python 3.12+, CMake, Ninja, and a native C/C++ toolchain on PATH.
+The Qt video decoder patches also require Git.
 Shared builds use the seed kit's FFmpeg binaries. Static Windows builds compile
 FFmpeg from source and install it alongside the new Qt kit.
 """
@@ -212,6 +213,20 @@ def patch_mingw(src):
             '".ifndef qt_mingw_avx_macros\\n" " .set qt_mingw_avx_macros, 1\\n" ".macro vmovapd args:vararg\\n"')
         content = re.sub(r'("    vmovdqu64 \\\\args\\n"\s*"\.endm\\n")', r'\1 ".endif\\n"', content)
         simd.write_text(content)
+
+
+def patch_video_decoder_handoff(src, version):
+    if version not in ("6.8.3", "6.11.2"):
+        return
+    patch = SCRIPTS / f"qt-{version}-decoder-handoff.patch"
+    applied = subprocess.run(["git", "apply", "--reverse", "--check", str(patch)],
+                             cwd=src, capture_output=True)
+    if applied.returncode:
+        run("git", "apply", patch, cwd=src)
+    header = SCRIPTS / "qt-video-decoder-handoff_p.h"
+    target = src / "src/plugins/multimedia/ffmpeg/playbackengine/qffmpegvideodecoderhandoff_p.h"
+    if not target.exists() or target.read_bytes() != header.read_bytes():
+        shutil.copyfile(header, target)
 
 
 def fix_d3d11(content):
@@ -460,6 +475,7 @@ def main():
                 d3d11.write_text(fix_d3d11(d3d11.read_text()))
             if args.toolchain == "msvc":
                 patch_msvc_multimedia(src)
+            patch_video_decoder_handoff(src, args.version)
             options += [f"-DFFMPEG_DIR={sdk.as_posix()}",
                         f"-DQT_DEPLOY_FFMPEG={'OFF' if args.static else 'ON'}", "-DFEATURE_ffmpeg=ON",
                         "-DFEATURE_spatialaudio=OFF",

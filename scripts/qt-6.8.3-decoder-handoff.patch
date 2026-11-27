@@ -1,0 +1,218 @@
+--- a/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegcodeccontext_p.h
++++ b/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegcodeccontext_p.h
+@@ -59,6 +59,13 @@
+     }
+ 
+ private:
++    friend class VideoDecoderHandoff;
++
++    struct OpenedDecoder {
++        AVCodecContextUPtr context;
++        HWAccelUPtr hwAccel;
++    };
++
+     enum VideoCodecCreationPolicy {
+         Hw,
+         Sw,
+@@ -66,6 +73,8 @@
+ 
+     static QMaybe<CodecContext> create(AVStream *stream, AVFormatContext *formatContext,
+                                        VideoCodecCreationPolicy videoCodecPolicy);
++    static QMaybe<OpenedDecoder> openDecoder(const AVCodecParameters *parameters,
++                                            VideoCodecCreationPolicy policy);
+     CodecContext(Data *data) : d(data) { }
+     QExplicitlySharedDataPointer<Data> d;
+ };
+--- a/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegcodeccontext.cpp
++++ b/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegcodeccontext.cpp
+@@ -2,7 +2,7 @@
+ // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+ 
+ #include "playbackengine/qffmpegcodeccontext_p.h"
+-#include "qffmpegcodecstorage_p.h"
++#include "playbackengine/qffmpegvideodecoderhandoff_p.h"
+ 
+ #include <QtCore/qloggingcategory.h>
+ 
+@@ -31,15 +31,19 @@
+     if (!stream)
+         return { u"Invalid stream"_s };
+ 
++    auto fallbackPolicy = Sw;
+     if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+-        auto hwCodec = create(stream, formatContext, Hw);
+-        if (hwCodec)
+-            return hwCodec;
+-
+-        qCInfo(qLcPlaybackEngineCodec) << hwCodec.error();
++        const bool softwareFirst = VideoDecoderHandoff::prefersSoftwareVideoDecoder();
++        if (softwareFirst)
++            qCDebug(qLcPlaybackEngineCodec) << "Trying software decoding first for video startup";
++        auto preferred = create(stream, formatContext, softwareFirst ? Sw : Hw);
++        if (preferred)
++            return preferred;
++        qCInfo(qLcPlaybackEngineCodec) << preferred.error();
++        fallbackPolicy = softwareFirst ? Hw : Sw;
+     }
+ 
+-    auto context = create(stream, formatContext, Sw);
++    auto context = create(stream, formatContext, fallbackPolicy);
+     if (!context)
+         qCWarning(qLcPlaybackEngineCodec) << context.error();
+ 
+@@ -57,17 +61,27 @@
+                                           VideoCodecCreationPolicy videoCodecPolicy)
+ {
+     Q_ASSERT(stream);
++    auto decoder = openDecoder(stream->codecpar, videoCodecPolicy);
++    if (!decoder)
++        return { decoder.error() };
++    return CodecContext(new Data(std::move(decoder->context), stream, formatContext,
++                                 std::move(decoder->hwAccel)));
++}
+ 
+-    if (videoCodecPolicy == Hw && stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
++QMaybe<CodecContext::OpenedDecoder> CodecContext::openDecoder(
++        const AVCodecParameters *parameters,
++        VideoCodecCreationPolicy videoCodecPolicy)
++{
++    if (videoCodecPolicy == Hw && parameters->codec_type != AVMEDIA_TYPE_VIDEO)
+         Q_ASSERT(!"Codec::create has been called with Hw policy on a non-video stream");
+ 
+     std::optional<Codec> decoder;
+     std::unique_ptr<QFFmpeg::HWAccel> hwAccel;
+ 
+     if (videoCodecPolicy == Hw)
+-        std::tie(decoder, hwAccel) = HWAccel::findDecoderWithHwAccel(stream->codecpar->codec_id);
++        std::tie(decoder, hwAccel) = HWAccel::findDecoderWithHwAccel(parameters->codec_id);
+     else
+-        decoder = QFFmpeg::findAVDecoder(stream->codecpar->codec_id);
++        decoder = VideoDecoderHandoff::findSoftwareDecoder(parameters->codec_id);
+ 
+     if (!decoder)
+         return { QString(u"No %1 decoder found").arg(videoCodecPolicy == Hw ? u"HW" : u"SW") };
+@@ -99,7 +113,7 @@
+         return { u"Unknown codec type"_s };
+     }
+ 
+-    int ret = avcodec_parameters_to_context(context.get(), stream->codecpar);
++    int ret = avcodec_parameters_to_context(context.get(), parameters);
+     if (ret < 0)
+         return QStringLiteral("Failed to set FFmpeg codec parameters: %1").arg(err2str(ret));
+ 
+@@ -118,7 +132,7 @@
+     if (ret < 0)
+         return QStringLiteral("Failed to open FFmpeg codec context: %1").arg(err2str(ret));
+ 
+-    return CodecContext(new Data(std::move(context), stream, formatContext, std::move(hwAccel)));
++    return OpenedDecoder{ std::move(context), std::move(hwAccel) };
+ }
+ 
+ QT_END_NAMESPACE
+--- a/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegstreamdecoder_p.h
++++ b/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegstreamdecoder_p.h
+@@ -21,11 +21,14 @@
+ 
+ #include <QtCore/qqueue.h>
+ 
++#include <deque>
+ #include <optional>
+ 
+ QT_BEGIN_NAMESPACE
+ 
+ namespace QFFmpeg {
++
++class VideoDecoderHandoff;
+ 
+ class StreamDecoder : public PlaybackEngineObject
+ {
+@@ -79,6 +82,8 @@
+     LoopOffset m_offset;
+ 
+     QQueue<Packet> m_packets;
++    std::unique_ptr<VideoDecoderHandoff> m_handoff;
++    std::deque<AVFrameUPtr> m_hardwareFrames;
+ };
+ 
+ } // namespace QFFmpeg
+--- a/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegstreamdecoder.cpp
++++ b/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegstreamdecoder.cpp
+@@ -2,6 +2,7 @@
+ // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+ 
+ #include "playbackengine/qffmpegstreamdecoder_p.h"
++#include "playbackengine/qffmpegvideodecoderhandoff_p.h"
+ #include "playbackengine/qffmpegmediadataholder_p.h"
+ #include <qloggingcategory.h>
+ 
+@@ -14,7 +15,8 @@
+ StreamDecoder::StreamDecoder(const CodecContext &codecContext, TrackPosition absSeekPos)
+     : m_codecContext(codecContext),
+       m_absSeekPos(absSeekPos),
+-      m_trackType(MediaDataHolder::trackTypeFromMediaType(codecContext.context()->codec_type))
++      m_trackType(MediaDataHolder::trackTypeFromMediaType(codecContext.context()->codec_type)),
++      m_handoff(VideoDecoderHandoff::create(codecContext))
+ {
+     qCDebug(qLcStreamDecoder) << "Create stream decoder, trackType" << m_trackType
+                               << "absSeekPos:" << absSeekPos.get();
+@@ -23,6 +25,7 @@
+ 
+ StreamDecoder::~StreamDecoder()
+ {
++    m_handoff.reset();
+     avcodec_flush_buffers(m_codecContext.context());
+ }
+ 
+@@ -40,6 +43,22 @@
+ 
+ void StreamDecoder::doNextStep()
+ {
++    if (m_handoff && !m_packets.empty()) {
++        if (auto pts = m_handoff->switchIfReady(
++                    m_packets.front(), m_offset, m_codecContext, m_hardwareFrames)) {
++            m_handoff.reset();
++            qCDebug(qLcStreamDecoder) << "Switched to hardware decoding after video timestamp"
++                                    << *pts;
++        }
++    }
++    // Present the worker's queued frames before feeding the next packet.
++    if (!m_hardwareFrames.empty()) {
++        auto frame = std::move(m_hardwareFrames.front());
++        m_hardwareFrames.pop_front();
++        onFrameFound({ m_offset, std::move(frame), m_codecContext, id() });
++        scheduleNextStep(false);
++        return;
++    }
+     auto packet = m_packets.dequeue();
+ 
+     auto decodePacket = [this](Packet packet) {
+@@ -104,7 +123,7 @@
+ {
+     const qint32 maxCount = maxQueueSize(m_trackType);
+ 
+-    return !m_packets.empty() && m_pendingFramesCount < maxCount
++    return (!m_packets.empty() || !m_hardwareFrames.empty()) && m_pendingFramesCount < maxCount
+             && PlaybackEngineObject::canDoNextStep();
+ }
+ 
+@@ -137,6 +156,8 @@
+ 
+     if (sendPacketResult == 0)
+         receiveAVFrames(!packet.isValid());
++    if (m_handoff)
++        m_handoff->enqueue(packet);
+ }
+ 
+ int StreamDecoder::sendAVPacket(Packet packet)
+@@ -178,7 +199,10 @@
+         if (m_trackType == QPlatformMediaPlayer::VideoStream)
+             avFrame = copyFromHwPool(std::move(avFrame));
+ 
+-        onFrameFound({ m_offset, std::move(avFrame), m_codecContext, id() });
++        const Frame frame{ m_offset, std::move(avFrame), m_codecContext, id() };
++        if (m_handoff && !flushPacket && frame.absoluteEnd() >= m_absSeekPos)
++            m_handoff->softwareFrameQueued(*frame.avFrame());
++        onFrameFound(frame);
+     }
+ }
+ 

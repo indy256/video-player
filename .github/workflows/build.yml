@@ -114,7 +114,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .qt-lto
-          key: qt-lto-${{ runner.os }}-${{ runner.arch }}-${{ matrix.qt-version }}-${{ steps.qt-toolchain.outputs.key }}-${{ hashFiles('scripts/build-qt-lto.py', 'scripts/qt-source-hashes.json', 'scripts/matroskaaudiopreroll.h', 'scripts/qt-mingw-lto.cmake', 'scripts/qt-mingw-avx.s') }}
+          key: qt-lto-${{ runner.os }}-${{ runner.arch }}-${{ matrix.qt-version }}-${{ steps.qt-toolchain.outputs.key }}-${{ hashFiles('scripts/build-qt-lto.py', 'scripts/qt-source-hashes.json', 'scripts/matroskaaudiopreroll.h', 'scripts/qt-mingw-lto.cmake', 'scripts/qt-mingw-avx.s', 'scripts/qt-video-decoder-handoff_p.h', format('scripts/qt-{0}-decoder-handoff.patch', matrix.qt-version)) }}
 
       - name: Install Windows FFmpeg build tools
         if: runner.os == 'Windows' && steps.qt-lto.outputs.cache-hit != 'true'

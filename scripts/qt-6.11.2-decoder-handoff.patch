@@ -1,0 +1,259 @@
+--- a/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegcodeccontext_p.h
++++ b/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegcodeccontext_p.h
+@@ -62,6 +62,13 @@
+     }
+ 
+ private:
++    friend class VideoDecoderHandoff;
++
++    struct OpenedDecoder {
++        AVCodecContextUPtr context;
++        HWAccelUPtr hwAccel;
++    };
++
+     enum VideoCodecCreationPolicy {
+         Hw,
+         Sw,
+@@ -70,6 +77,9 @@
+     static q23::expected<CodecContext, QString> create(AVStream *stream, AVFormatContext *formatContext,
+                                        const QPlaybackOptions &playbackOptions,
+                                        VideoCodecCreationPolicy videoCodecPolicy);
++    static q23::expected<OpenedDecoder, QString> openDecoder(
++            const AVCodecParameters *parameters, const QPlaybackOptions &options,
++            VideoCodecCreationPolicy policy);
+     CodecContext(Data *data) : d(data) { }
+     QExplicitlySharedDataPointer<Data> d;
+ };
+--- a/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegcodeccontext.cpp
++++ b/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegcodeccontext.cpp
+@@ -2,7 +2,7 @@
+ // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+ 
+ #include "playbackengine/qffmpegcodeccontext_p.h"
+-#include "qffmpegcodecstorage_p.h"
++#include "playbackengine/qffmpegvideodecoderhandoff_p.h"
+ 
+ #include <QtMultimedia/qplaybackoptions.h>
+ #include <QtCore/qloggingcategory.h>
+@@ -34,15 +34,19 @@
+     if (!stream)
+         return q23::unexpected{ u"Invalid stream"_s };
+ 
++    auto fallbackPolicy = Sw;
+     if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+-        auto hwCodec = create(stream, formatContext, options, Hw);
+-        if (hwCodec)
+-            return hwCodec;
+-
+-        qCInfo(qLcPlaybackEngineCodec) << hwCodec.error();
++        const bool softwareFirst = VideoDecoderHandoff::prefersSoftwareVideoDecoder();
++        if (softwareFirst)
++            qCDebug(qLcPlaybackEngineCodec) << "Trying software decoding first for video startup";
++        auto preferred = create(stream, formatContext, options, softwareFirst ? Sw : Hw);
++        if (preferred)
++            return preferred;
++        qCInfo(qLcPlaybackEngineCodec) << preferred.error();
++        fallbackPolicy = softwareFirst ? Hw : Sw;
+     }
+ 
+-    auto context = create(stream, formatContext, options, Sw);
++    auto context = create(stream, formatContext, options, fallbackPolicy);
+     if (!context)
+         qCWarning(qLcPlaybackEngineCodec) << context.error();
+ 
+@@ -62,17 +66,27 @@
+                                                           VideoCodecCreationPolicy videoCodecPolicy)
+ {
+     Q_ASSERT(stream);
++    auto decoder = openDecoder(stream->codecpar, options, videoCodecPolicy);
++    if (!decoder)
++        return q23::unexpected{ decoder.error() };
++    return CodecContext(new Data(std::move(decoder->context), stream, formatContext,
++                                 std::move(decoder->hwAccel)));
++}
+ 
+-    if (videoCodecPolicy == Hw && stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
++q23::expected<CodecContext::OpenedDecoder, QString> CodecContext::openDecoder(
++        const AVCodecParameters *parameters, const QPlaybackOptions &options,
++        VideoCodecCreationPolicy videoCodecPolicy)
++{
++    if (videoCodecPolicy == Hw && parameters->codec_type != AVMEDIA_TYPE_VIDEO)
+         Q_ASSERT(!"Codec::create has been called with Hw policy on a non-video stream");
+ 
+     std::optional<Codec> decoder;
+     std::unique_ptr<QFFmpeg::HWAccel> hwAccel;
+ 
+     if (videoCodecPolicy == Hw)
+-        std::tie(decoder, hwAccel) = HWAccel::findDecoderWithHwAccel(stream->codecpar->codec_id);
++        std::tie(decoder, hwAccel) = HWAccel::findDecoderWithHwAccel(parameters->codec_id);
+     else
+-        decoder = QFFmpeg::findAVDecoder(stream->codecpar->codec_id);
++        decoder = VideoDecoderHandoff::findSoftwareDecoder(parameters->codec_id);
+ 
+     if (!decoder)
+         return q23::unexpected{
+@@ -106,7 +120,7 @@
+         return q23::unexpected{ u"Unknown codec type"_s };
+     }
+ 
+-    int ret = avcodec_parameters_to_context(context.get(), stream->codecpar);
++    int ret = avcodec_parameters_to_context(context.get(), parameters);
+     if (ret < 0)
+         return q23::unexpected{
+             QStringLiteral("Failed to set FFmpeg codec parameters: %1").arg(err2str(ret))
+@@ -132,7 +146,7 @@
+             QStringLiteral("Failed to open FFmpeg codec context: %1").arg(err2str(ret))
+         };
+ 
+-    return CodecContext(new Data(std::move(context), stream, formatContext, std::move(hwAccel)));
++    return OpenedDecoder{ std::move(context), std::move(hwAccel) };
+ }
+ 
+ QT_END_NAMESPACE
+--- a/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegstreamdecoder_p.h
++++ b/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegstreamdecoder_p.h
+@@ -21,18 +21,21 @@
+ 
+ #include <QtCore/qqueue.h>
+ 
++#include <deque>
+ #include <optional>
+ 
+ QT_BEGIN_NAMESPACE
+ 
+ namespace QFFmpeg {
+ 
++class VideoDecoderHandoff;
++
+ class StreamDecoder : public PlaybackEngineObject
+ {
+     Q_OBJECT
+ public:
+     StreamDecoder(const PlaybackEngineObjectID &id, const CodecContext &codecContext,
+-                  TrackPosition absSeekPos);
++                  TrackPosition absSeekPos, const QPlaybackOptions &options);
+ 
+     ~StreamDecoder() override;
+ 
+@@ -83,9 +86,11 @@
+         qint32 pendingFramesCount = 0;
+         LoopOffset offset = {};
+         QQueue<Packet> packets = {};
++        std::deque<AVFrameUPtr> hardwareFrames;
+     };
+ 
+     SessionContext m_sessionCtx;
++    std::unique_ptr<VideoDecoderHandoff> m_handoff;
+ };
+ 
+ } // namespace QFFmpeg
+--- a/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegstreamdecoder.cpp
++++ b/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegstreamdecoder.cpp
+@@ -2,7 +2,9 @@
+ // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+ 
+ #include "playbackengine/qffmpegstreamdecoder_p.h"
++#include "playbackengine/qffmpegvideodecoderhandoff_p.h"
+ #include "playbackengine/qffmpegmediadataholder_p.h"
++#include <QtMultimedia/qplaybackoptions.h>
+ #include <qloggingcategory.h>
+ 
+ QT_BEGIN_NAMESPACE
+@@ -12,11 +14,12 @@
+ namespace QFFmpeg {
+ 
+ StreamDecoder::StreamDecoder(const PlaybackEngineObjectID &id, const CodecContext &codecContext,
+-                             TrackPosition absSeekPos)
++                             TrackPosition absSeekPos, const QPlaybackOptions &options)
+     : PlaybackEngineObject(id),
+       m_codecContext(codecContext),
+       m_trackType(MediaDataHolder::trackTypeFromMediaType(codecContext.context()->codec_type)),
+-      m_sessionCtx{ absSeekPos }
++      m_sessionCtx{ absSeekPos },
++      m_handoff(VideoDecoderHandoff::create(codecContext, options))
+ {
+     qCDebug(qLcStreamDecoder) << "Create stream decoder, trackType" << m_trackType
+                               << "absSeekPos:" << absSeekPos.get();
+@@ -25,12 +28,15 @@
+ 
+ StreamDecoder::~StreamDecoder()
+ {
++    m_handoff.reset();
+     avcodec_flush_buffers(m_codecContext.context());
+ }
+ 
+ void StreamDecoder::seek(quint64 sessionID, TrackPosition pos, const LoopOffset &offset)
+ {
+     updateSession(sessionID, [this, pos, offset]() {
++        if (m_handoff)
++            m_handoff->reset();
+         m_sessionCtx = { offset.loopStartTimeUs.asDuration() + pos };
+         avcodec_flush_buffers(m_codecContext.context());
+     });
+@@ -57,6 +63,23 @@
+ 
+ void StreamDecoder::doNextStep()
+ {
++    if (m_handoff && !m_sessionCtx.packets.empty()) {
++        if (auto pts = m_handoff->switchIfReady(
++                    m_sessionCtx.packets.front(), m_sessionCtx.offset, m_codecContext,
++                    m_sessionCtx.hardwareFrames)) {
++            m_handoff.reset();
++            qCDebug(qLcStreamDecoder) << "Switched to hardware decoding after video timestamp"
++                                    << *pts;
++        }
++    }
++    // Present the worker's queued frames before feeding the next packet.
++    if (!m_sessionCtx.hardwareFrames.empty()) {
++        auto frame = std::move(m_sessionCtx.hardwareFrames.front());
++        m_sessionCtx.hardwareFrames.pop_front();
++        onFrameFound({ m_sessionCtx.offset, std::move(frame), m_codecContext, id() });
++        scheduleNextStep();
++        return;
++    }
+     Packet packet = m_sessionCtx.packets.dequeue();
+ 
+     auto decodePacket = [this](const Packet &packet) {
+@@ -121,7 +144,8 @@
+ {
+     const qint32 maxCount = maxQueueSize(m_trackType);
+ 
+-    return !m_sessionCtx.packets.empty() && m_sessionCtx.pendingFramesCount < maxCount
++    return (!m_sessionCtx.packets.empty() || !m_sessionCtx.hardwareFrames.empty())
++            && m_sessionCtx.pendingFramesCount < maxCount
+             && PlaybackEngineObject::canDoNextStep();
+ }
+ 
+@@ -154,6 +178,8 @@
+ 
+     if (sendPacketResult == 0)
+         receiveAVFrames(!packet.isValid());
++    if (m_handoff)
++        m_handoff->enqueue(packet);
+ }
+ 
+ int StreamDecoder::sendAVPacket(const Packet &packet)
+@@ -195,7 +221,10 @@
+         if (m_trackType == QPlatformMediaPlayer::VideoStream)
+             avFrame = copyFromHwPool(std::move(avFrame));
+ 
+-        onFrameFound({ m_sessionCtx.offset, std::move(avFrame), m_codecContext, id() });
++        const Frame frame{ m_sessionCtx.offset, std::move(avFrame), m_codecContext, id() };
++        if (m_handoff && !flushPacket && frame.absoluteEnd() >= m_sessionCtx.absSeekPos)
++            m_handoff->softwareFrameQueued(*frame.avFrame());
++        onFrameFound(frame);
+     }
+ }
+ 
+--- a/src/plugins/multimedia/ffmpeg/qffmpegplaybackengine.cpp
++++ b/src/plugins/multimedia/ffmpeg/qffmpegplaybackengine.cpp
+@@ -377,7 +377,8 @@
+     }
+ 
+     auto &stream = m_streams[trackType] =
+-            createPlaybackEngineObject<StreamDecoder>(*codecContext, renderer->seekPosition());
++            createPlaybackEngineObject<StreamDecoder>(
++                    *codecContext, renderer->seekPosition(), m_options);
+ 
+     Q_ASSERT(trackType == stream->trackType());
+ 
