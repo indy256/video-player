@@ -154,15 +154,6 @@ if(BUILD_TESTING)
             qt_import_plugins(${test_target} NO_DEFAULT)
         endif()
     endforeach()
-    if(MSVC)
-        foreach(test_target IN ITEMS player_tests instance_tests updater_tests fileassociation_tests)
-            set_target_properties(${test_target} PROPERTIES
-                INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
-                INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL OFF)
-            # MSVC otherwise enables LTCG when a linked library contains /GL objects.
-            target_link_options(${test_target} PRIVATE "$<$<CONFIG:Release,MinSizeRel>:/LTCG:OFF>")
-        endforeach()
-    endif()
     if(UNIX)
         add_test(NAME update_unix COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/tests/update-unix.sh"
             "${CMAKE_CURRENT_SOURCE_DIR}/packaging/update-unix.sh")
