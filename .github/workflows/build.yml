@@ -23,17 +23,11 @@ jobs:
             qt-arch: linux_gcc_64
             artifact-path: dist/vp-linux-x64.AppImage
           - os: windows-latest
-            # aqt 3.3.0 cannot read Qt 6.11's reorganized windows_x86 repository.
-            # https://github.com/miurahr/aqtinstall/issues/1007
-            qt-version: '6.10.3'
-            qt-host: windows
-            qt-arch: win64_msvc2022_64
+            qt-version: '6.11.2'
             msvc-arch: x64
             artifact-path: dist/vp-windows-x64.exe
           - os: windows-11-vs2026-arm
             qt-version: '6.11.2'
-            qt-host: windows_arm64
-            qt-arch: win64_msvc2022_arm64
             msvc-arch: arm64
             artifact-path: dist/vp-windows-arm64.exe
           - os: macos-latest
@@ -66,6 +60,7 @@ jobs:
         run: ./scripts/setup-msvc.ps1 -Architecture ${{ matrix.msvc-arch }}
 
       - name: Install Qt and multimedia backend
+        if: runner.os != 'Windows'
         # v4.4 uses $/action, which some hosted runners reject when parsing cleanup steps.
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
@@ -121,20 +116,37 @@ jobs:
           path: .qt-lto
           key: qt-lto-${{ runner.os }}-${{ runner.arch }}-${{ matrix.qt-version }}-${{ steps.qt-toolchain.outputs.key }}-${{ hashFiles('scripts/build-qt-lto.py', 'scripts/qt-source-hashes.json', 'scripts/matroskaaudiopreroll.h', 'scripts/qt-mingw-lto.cmake', 'scripts/qt-mingw-avx.s') }}
 
+      - name: Install Windows FFmpeg build tools
+        if: runner.os == 'Windows' && steps.qt-lto.outputs.cache-hit != 'true'
+        id: msys2
+        uses: msys2/setup-msys2@3c51bf698df1e37b2261f53cb67797b97761185c # v2
+        with:
+          msystem: MSYS
+          install: make ${{ matrix.msvc-arch == 'x64' && 'mingw-w64-ucrt-x86_64-nasm' || '' }}
+
       - name: Build Qt modules with LTO
         if: steps.qt-lto.outputs.cache-hit != 'true'
         shell: python {0}
         env:
           QT_SOURCE_VERSION: ${{ matrix.qt-version }}
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
           import os, pathlib, subprocess, sys
-          subprocess.run([
+          command = [
               sys.executable, 'scripts/build-qt-lto.py', '--version', os.environ['QT_SOURCE_VERSION'],
-              '--seed', os.environ['QT_ROOT_DIR'], '--work', os.environ['RUNNER_TEMP'] + '/qt-lto',
+              '--work', os.environ['RUNNER_TEMP'] + '/qt-lto',
               '--install', str(pathlib.Path('.qt-lto').resolve()), '--parallel', '2',
               '--toolchain', 'msvc' if os.name == 'nt' else 'native',
               '--arch', os.environ['RUNNER_ARCH'].lower(),
-          ], check=True)
+          ]
+          if os.name == 'nt':
+              msys = pathlib.Path(os.environ['MSYS2_LOCATION'])
+              os.environ['MSYS2_BASH'] = str(msys / 'usr/bin/bash.exe')
+              os.environ['PATH'] += os.pathsep + str(msys / 'ucrt64/bin')
+              command += ['--static']
+          else:
+              command += ['--seed', os.environ['QT_ROOT_DIR']]
+          subprocess.run(command, check=True)
 
       - name: Cache completed Qt source build
         if: steps.qt-lto.outputs.cache-hit != 'true'
@@ -148,19 +160,21 @@ jobs:
         run: |
           import json, os, pathlib
           root = pathlib.Path('.qt-lto').resolve()
-          seed = pathlib.Path(os.environ['QT_ROOT_DIR']).resolve()
+          seed = pathlib.Path(os.environ['QT_ROOT_DIR']).resolve() if os.name != 'nt' else None
           manifest = json.loads((root / 'lto-build.json').read_text())
           assert all(item['lto'] for item in manifest['modules'].values())
+          assert manifest['static'] == (os.name == 'nt')
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               for key in ('QT_ROOT_DIR', 'QTDIR', 'CMAKE_PREFIX_PATH'):
                   output.write(f'{key}={root.as_posix()}\n')
-              output.write(f'QT_PLUGIN_PATH={root.as_posix()}/plugins\n')
-              for key in ('QML_IMPORT_PATH', 'QML2_IMPORT_PATH'):
-                  output.write(f'{key}={root.as_posix()}/qml\n')
+              if seed is not None:
+                  output.write(f'QT_PLUGIN_PATH={root.as_posix()}/plugins\n')
+                  for key in ('QML_IMPORT_PATH', 'QML2_IMPORT_PATH'):
+                      output.write(f'{key}={root.as_posix()}/qml\n')
               # The install action's seed libraries must not override the new
               # kit's RUNPATH during application builds and playback tests.
               for key in ('LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH', 'DYLD_FRAMEWORK_PATH', 'PKG_CONFIG_PATH'):
-                  if key in os.environ:
+                  if seed is not None and key in os.environ:
                       paths = [p for p in os.environ[key].split(os.pathsep)
                                if p and not pathlib.Path(p).resolve().is_relative_to(seed)]
                       output.write(f'{key}={os.pathsep.join(paths)}\n')
@@ -171,11 +185,15 @@ jobs:
         shell: bash
         env:
           RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-        run: >-
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_PREFIX_PATH="$PWD/.qt-lto" -DVIDEO_PLAYER_REQUIRE_QT_LTO=ON
-          -DBUILD_TESTING=ON -DVIDEO_PLAYER_DEPLOY=ON
-          -DVIDEO_PLAYER_VERSION="$RELEASE_VERSION"
+        run: |
+          extra=()
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            extra=(-DVIDEO_PLAYER_STATIC_WINDOWS=ON -DFFMPEG_DIR="$PWD/.qt-lto/ffmpeg")
+          fi
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$PWD/.qt-lto" -DVIDEO_PLAYER_REQUIRE_QT_LTO=ON \
+            -DBUILD_TESTING=ON -DVIDEO_PLAYER_DEPLOY=ON \
+            -DVIDEO_PLAYER_VERSION="$RELEASE_VERSION" "${extra[@]}"
 
       - name: Build
         run: cmake --build build --config Release --parallel 2
@@ -208,37 +226,22 @@ jobs:
             build/gpu-gamma-tests.txt
           if-no-files-found: ignore
 
-      - name: Package Windows application and runtime
+      - name: Package single Windows executable
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           ARTIFACT_PATH: ${{ matrix.artifact-path }}
         run: |
-          cmake --install build --config Release --prefix "$env:GITHUB_WORKSPACE/package"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $exe = 'package/bin/VideoPlayer.exe'
+          $exe = 'build/VideoPlayer.exe'
           $headers = & dumpbin /HEADERS $exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $machine = if ($env:RUNNER_ARCH -eq 'ARM64') { 'AA64' } else { '8664' }
           if (-not ($headers -match "(?i)\b$machine machine")) { throw 'Wrong executable architecture' }
-          foreach ($pattern in @('package/bin/Qt6Multimedia.dll', 'package/bin/avcodec-*.dll', 'package/bin/avformat-*.dll')) {
-            if (-not (Test-Path $pattern)) { throw "Missing runtime: $pattern" }
-          }
-          if (-not (Get-ChildItem package -Recurse -Filter ffmpegmediaplugin.dll)) { throw 'Missing FFmpeg backend' }
-          # Ship the application-local MSVC runtime instead of requiring an installer.
-          $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x64' }
-          $crt = Get-ChildItem (Join-Path $env:VCToolsRedistDir $arch) -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
-          if (-not $crt) { throw 'MSVC redistributable DLL directory not found' }
-          Copy-Item (Join-Path $crt.FullName '*.dll') package/bin
+          $dependencies = & dumpbin /DEPENDENTS $exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($dependencies -match '(?i)(Qt6|avcodec|avformat|avutil|swresample|swscale|VCRUNTIME|MSVCP|libgcc|libstdc\+\+|libwinpthread)') { throw 'Player imports a non-system runtime DLL' }
           New-Item -ItemType Directory -Force dist | Out-Null
-          cmake -S packaging/windows -B build/portable -G Ninja -DCMAKE_BUILD_TYPE=Release "-DRUNTIME_DIR=$env:GITHUB_WORKSPACE/package"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build/portable --parallel 2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item build/portable/VideoPlayer.exe $env:ARTIFACT_PATH
-          $dependencies = & dumpbin /DEPENDENTS $env:ARTIFACT_PATH
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ($dependencies -match '(?i)(Qt6|avcodec|avformat|VCRUNTIME|MSVCP|libgcc|libstdc\+\+)') { throw 'Portable launcher requires a non-system DLL' }
+          Copy-Item $exe $env:ARTIFACT_PATH
           ./scripts/test-portable.ps1 -Executable $env:ARTIFACT_PATH
 
       - name: Package macOS application

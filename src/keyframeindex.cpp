@@ -1,7 +1,9 @@
 #include "keyframeindex.h"
 #include <QElapsedTimer>
 #include <QFile>
+#ifndef VIDEO_PLAYER_STATIC_FFMPEG
 #include <QLibrary>
+#endif
 #include <QScopeGuard>
 #include <QThread>
 #include <QtEndian>
@@ -206,6 +208,7 @@ std::optional<QList<qint64>> movKeyframeOffsets(IndexInput &input, const AVStrea
     return offsets;
 }
 
+#ifndef VIDEO_PLAYER_STATIC_FFMPEG
 void setLibraryName(QLibrary &library, const char *name, int major) {
 #ifdef Q_OS_WIN
     library.setFileName(QString("%1-%2").arg(name).arg(major));
@@ -213,8 +216,10 @@ void setLibraryName(QLibrary &library, const char *name, int major) {
     library.setFileNameAndVersion(QString::fromLatin1(name), major);
 #endif
 }
+#endif
 
 QList<qint64> readKeyframes(const QUrl &source, qint64 &bytesRead) {
+#ifndef VIDEO_PLAYER_STATIC_FFMPEG
     QLibrary format, codec, util;
     setLibraryName(format, "avformat", LIBAVFORMAT_VERSION_MAJOR);
     setLibraryName(codec, "avcodec", LIBAVCODEC_VERSION_MAJOR);
@@ -242,6 +247,7 @@ QList<qint64> readKeyframes(const QUrl &source, qint64 &bytesRead) {
     RESOLVE(util, av_strdup);
 #undef RESOLVE
     if ((avformat_version() >> 16) != LIBAVFORMAT_VERSION_MAJOR) return {};
+#endif
     IndexInput input{QFile(source.toLocalFile()), bytesRead};
     input.timer.start();
     if (!input.file.open(QIODevice::ReadOnly | QIODevice::Unbuffered)) return {};

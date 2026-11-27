@@ -18,7 +18,7 @@
 #endif
 
 int main(int argc, char *argv[]) {
-    // Use the installed FFmpeg shared libraries through Qt Multimedia's backend.
+    // Use Qt Multimedia's FFmpeg backend in both shared and static builds.
     qputenv("QT_MEDIA_BACKEND", "ffmpeg");
     QApplication app(argc, argv);
     app.setApplicationName("Video Player");
@@ -37,7 +37,10 @@ int main(int argc, char *argv[]) {
     // Exercise the deployed platform plugin and FFmpeg decoder without opening a
     // window, changing saved settings, or forwarding to an already running player.
     if (app.arguments().value(1) == "--runtime-check") {
-        if (app.arguments().size() != 3 || !QFileInfo::exists(app.arguments().at(2))) return 2;
+        const auto arguments = app.arguments();
+        if (arguments.size() < 3 || arguments.size() > 4 || !QFileInfo::exists(arguments.at(2))) return 2;
+        if (arguments.size() == 4 && QFileInfo(arguments.at(3)) != QFileInfo(app.applicationFilePath()))
+            return 6;
         // Catch missing QML imports in portable deployments, even without a GPU.
         QQmlEngine engine;
         QQmlComponent surface(&engine, QUrl("qrc:/player/video/Video.qml"));
@@ -53,7 +56,7 @@ int main(int argc, char *argv[]) {
         });
         QObject::connect(&player, &QMediaPlayer::errorOccurred, &app, [&app] { app.exit(3); });
         QTimer::singleShot(15000, &app, [&app] { app.exit(4); });
-        player.setSource(QUrl::fromLocalFile(QFileInfo(app.arguments().at(2)).absoluteFilePath()));
+        player.setSource(QUrl::fromLocalFile(QFileInfo(arguments.at(2)).absoluteFilePath()));
         QTimer::singleShot(0, &player, &QMediaPlayer::play);
         return app.exec();
     }

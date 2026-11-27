@@ -1,4 +1,3 @@
-# Shared by the application and the standalone Windows portable launcher.
 option(VIDEO_PLAYER_OPTIMIZE_SIZE "Enable LTO and size optimizations in release builds" ON)
 if(VIDEO_PLAYER_OPTIMIZE_SIZE)
     include(CheckIPOSupported)

@@ -1,49 +1,53 @@
 param(
-    [string]$QtRoot = 'C:\Qt\6.11.2\mingw_64',
+    [string]$QtRoot,
     [string]$ToolsRoot = 'C:\Qt\Tools',
+    [ValidateRange(1, 64)][int]$Jobs = 4,
     [switch]$Test,
-    [switch]$Portable,
-    [switch]$QtLto
+    [switch]$Portable
 )
 $ErrorActionPreference = 'Stop'
-$cmake = Join-Path $ToolsRoot 'CMake_64\bin\cmake.exe'
-$buildDir = Join-Path $PSScriptRoot 'build'
-if ($QtLto) {
-    $QtRoot = Join-Path $PSScriptRoot '.qt-lto'
-    if (-not (Test-Path "$QtRoot/lto-build.json")) { throw 'Build the LTO Qt kit with scripts/build-qt-lto.py first (see README).' }
-    # CMake caches Qt component paths; use a separate build to avoid mixing kits.
-    $buildDir = Join-Path $PSScriptRoot 'build/lto-player'
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+$toolPaths = @("$ToolsRoot\CMake\bin", "$ToolsRoot\CMake_64\bin", "$ToolsRoot\Ninja")
+& "$PSScriptRoot/scripts/setup-msvc.ps1" -Architecture $arch
+$env:PATH = ($toolPaths -join ';') + ';' + $env:PATH
+$cmake = Get-Command cmake.exe -CommandType Application | Select-Object -First 1 -ExpandProperty Source
+$ninja = Get-Command ninja.exe -CommandType Application | Select-Object -First 1 -ExpandProperty Source
+
+$requireQtLto = -not $QtRoot
+if ($requireQtLto) {
+    $QtRoot = Join-Path $PSScriptRoot '.qt-static'
+    $qtWorkDir = Join-Path $PSScriptRoot 'build/qt-static-work'
+    if (-not (Test-Path -LiteralPath "$QtRoot/lto-build.json")) {
+        if (-not $env:MSYS2_BASH -and (Test-Path -LiteralPath 'C:\msys64\usr\bin\bash.exe')) {
+            $env:MSYS2_BASH = 'C:\msys64\usr\bin\bash.exe'
+            $env:PATH += ';C:\msys64\ucrt64\bin'
+        }
+        & python "$PSScriptRoot/scripts/build-qt-lto.py" --static --work $qtWorkDir `
+            --install $QtRoot --toolchain msvc --arch $arch --parallel $Jobs
+        if ($LASTEXITCODE -ne 0) { throw 'Static Qt and FFmpeg build failed' }
+    }
 }
-$env:PATH = "$QtRoot\bin;$ToolsRoot\mingw1310_64\bin;$env:PATH"
-$requireQtLto = if ($QtLto) { 'ON' } else { 'OFF' }
-& $cmake -S $PSScriptRoot -B $buildDir -G Ninja "-DCMAKE_PREFIX_PATH=$QtRoot" "-DCMAKE_MAKE_PROGRAM=$ToolsRoot/Ninja/ninja.exe" "-DCMAKE_CXX_COMPILER=$ToolsRoot/mingw1310_64/bin/g++.exe" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON "-DVIDEO_PLAYER_REQUIRE_QT_LTO=$requireQtLto"
+$QtRoot = (Resolve-Path -LiteralPath $QtRoot).Path
+$buildDir = Join-Path $PSScriptRoot "build/static-player-msvc-$arch"
+$compiler = Get-Command cl.exe -CommandType Application | Select-Object -First 1 -ExpandProperty Source
+& $cmake -S $PSScriptRoot -B $buildDir -G Ninja "-DCMAKE_PREFIX_PATH=$QtRoot" "-DFFMPEG_DIR=$QtRoot/ffmpeg" `
+    "-DCMAKE_MAKE_PROGRAM=$ninja" "-DCMAKE_CXX_COMPILER=$compiler" -DCMAKE_BUILD_TYPE=Release `
+    "-DBUILD_TESTING=$($Test.IsPresent)" -DVIDEO_PLAYER_STATIC_WINDOWS=ON "-DVIDEO_PLAYER_REQUIRE_QT_LTO=$requireQtLto"
 if ($LASTEXITCODE -ne 0) { throw 'Configure failed' }
-& $cmake --build $buildDir --parallel
+& $cmake --build $buildDir --target VideoPlayer --parallel $Jobs
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+
+$exe = Join-Path $buildDir 'VideoPlayer.exe'
 if ($Test) {
-    & "$ToolsRoot\CMake_64\bin\ctest.exe" --test-dir $buildDir --output-on-failure
+    & "$PSScriptRoot/scripts/test-portable.ps1" -Executable $exe
+    & $cmake --build $buildDir --parallel $Jobs
+    if ($LASTEXITCODE -ne 0) { throw 'Test build failed' }
+    & (Join-Path (Split-Path -Parent $cmake) 'ctest.exe') --test-dir $buildDir --output-on-failure
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
 }
 $distDir = Join-Path $PSScriptRoot 'dist'
 New-Item -ItemType Directory -Path $distDir -Force | Out-Null
-Copy-Item -LiteralPath "$buildDir\VideoPlayer.exe" -Destination $distDir -Force
-& "$QtRoot\bin\windeployqt.exe" --release --compiler-runtime --qmldir "$PSScriptRoot/src/video" --force "$distDir\VideoPlayer.exe"
-if ($LASTEXITCODE -ne 0) { throw 'Deployment failed' }
-Write-Host "Player ready: $distDir\VideoPlayer.exe"
-if ($Portable) {
-    & $cmake -S $PSScriptRoot -B $buildDir -DVIDEO_PLAYER_DEPLOY=ON
-    if ($LASTEXITCODE -ne 0) { throw 'Deployment configuration failed' }
-    $runtimeDir = Join-Path $buildDir 'portable-runtime'
-    & $cmake --install $buildDir --prefix $runtimeDir
-    if ($LASTEXITCODE -ne 0) { throw 'Runtime installation failed' }
-    & $cmake -S "$PSScriptRoot/packaging/windows" -B "$buildDir/portable" -G Ninja `
-        "-DCMAKE_MAKE_PROGRAM=$ToolsRoot/Ninja/ninja.exe" "-DCMAKE_CXX_COMPILER=$ToolsRoot/mingw1310_64/bin/g++.exe" `
-        -DCMAKE_BUILD_TYPE=Release "-DRUNTIME_DIR=$runtimeDir"
-    if ($LASTEXITCODE -ne 0) { throw 'Portable configuration failed' }
-    & $cmake --build "$buildDir/portable" --parallel
-    if ($LASTEXITCODE -ne 0) { throw 'Portable build failed' }
-    $portableExe = Join-Path $distDir 'vp-windows-x64.exe'
-    Copy-Item -LiteralPath "$buildDir/portable/VideoPlayer.exe" -Destination $portableExe -Force
-    if ($Test) { & "$PSScriptRoot/scripts/test-portable.ps1" -Executable $portableExe }
-    Write-Host "Self-contained player ready: $portableExe"
-}
+$fileName = if ($Portable) { "vp-windows-$arch.exe" } else { 'VideoPlayer.exe' }
+$outputFile = Join-Path $distDir $fileName
+Copy-Item -LiteralPath $exe -Destination $outputFile -Force
+Write-Host "Single-file player ready: $outputFile"

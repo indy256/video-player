@@ -1,7 +1,8 @@
-"""Build the player's shared Qt modules with LTO, preserving the kit's FFmpeg ABI.
+"""Build the player's Qt modules with LTO from checksum-pinned sources.
 
 Requires Python 3.12+, CMake, Ninja, and a native C/C++ toolchain on PATH.
-The seed kit supplies only FFmpeg binaries, not Qt libraries for the new build.
+Shared builds use the seed kit's FFmpeg binaries. Static Windows builds compile
+FFmpeg from source and install it alongside the new Qt kit.
 """
 import argparse
 import hashlib
@@ -20,6 +21,7 @@ FFMPEG = {
     "6.10.3": ("7.1.3", "e0b04c4b43d7e6d67cb6710334fb513adf13ac860532f30e1d0ac4c231f232fb"),
     "6.11.2": ("7.1.5", "e3963a50831c985933e1a625ed566ec4c7adb5c012c34fa9f84438e1d61bdacc"),
 }
+FFMPEG_COMPONENTS = {"avcodec": 61, "avformat": 61, "avutil": 59, "swresample": 5, "swscale": 8}
 
 
 def run(*args, cwd=None, capture=False):
@@ -57,6 +59,13 @@ def source(work, name, url, checksum, dirname, fallback_url=None):
     return result
 
 
+def ffmpeg_source(args):
+    version, checksum = FFMPEG[args.version]
+    return source(args.work, f"ffmpeg-{version}.tar.gz",
+                  f"https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n{version}",
+                  checksum, f"FFmpeg-n{version}")
+
+
 def ffmpeg_sdk(args):
     """Pair Qt's FFmpeg binaries with the matching upstream public headers.
 
@@ -64,15 +73,12 @@ def ffmpeg_sdk(args):
     All supported targets (x64/ARM64) are little-endian with unaligned access.
     No FFmpeg implementation code is compiled or changed here.
     """
-    version, checksum = FFMPEG[args.version]
-    src = source(args.work, f"ffmpeg-{version}.tar.gz",
-                 f"https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n{version}",
-                 checksum, f"FFmpeg-n{version}")
+    version = FFMPEG[args.version][0]
+    src = ffmpeg_source(args)
     sdk = args.work / "ffmpeg-sdk"
     for part in ("include", "lib", "bin"):
         (sdk / part).mkdir(parents=True, exist_ok=True)
-    components = {"avcodec": 61, "avformat": 61, "avutil": 59, "swresample": 5, "swscale": 8}
-    for component, major in components.items():
+    for component, major in FFMPEG_COMPONENTS.items():
         headers = sdk / "include" / f"lib{component}"
         headers.mkdir(exist_ok=True)
         for header in (src / f"lib{component}").glob("*.h"):
@@ -123,6 +129,72 @@ def ffmpeg_sdk(args):
     (sdk / "include/libavutil/avconfig.h").write_text(
         "#ifndef AVUTIL_AVCONFIG_H\n#define AVUTIL_AVCONFIG_H\n"
         "#define AV_HAVE_BIGENDIAN 0\n#define AV_HAVE_FAST_UNALIGNED 1\n#endif\n")
+    return sdk
+
+
+def static_ffmpeg_sdk(args):
+    src = ffmpeg_source(args)
+    sdk = args.install / "ffmpeg"
+    build = args.work / "ffmpeg-static-build"
+    build.mkdir(parents=True, exist_ok=True)
+    # Use the same prefixed zlib symbols as QtCore, which links this library in.
+    shutil.copy2(args.install / "lib/Qt6BundledZLIB.lib", build / "zlib.lib")
+    qt_headers = args.install / "include"
+    zlib_cflags = " ".join(f"-I{path.as_posix()}" for path in (qt_headers / "QtZlib", qt_headers / "QtCore", qt_headers))
+    options = ["--disable-shared", "--enable-static", "--disable-programs", "--disable-doc", "--disable-debug",
+               "--disable-avdevice", "--disable-avfilter", "--disable-postproc", "--disable-autodetect",
+               "--enable-d3d11va", "--enable-d3d12va", "--enable-dxva2", "--enable-schannel",
+               "--enable-mediafoundation", "--enable-zlib", "--disable-decoder=truemotion1",
+               f"--extra-cflags={zlib_cflags} -DQT_STATIC", f"--extra-ldflags=-libpath:{build.as_posix()}"]
+    arch = "aarch64" if args.arch == "arm64" else "x86_64"
+    options += ["--toolchain=msvc", f"--arch={arch}"]
+    required_tools = "make nasm"
+    if args.arch == "arm64":
+        # Match the stock Windows ARM64 Qt build. Direct3D hardware decoders
+        # are available with this configuration.
+        required_tools = "make"
+        options += ["--disable-asm"]
+    bash = os.environ.get("MSYS2_BASH", "bash")
+    compiler = shutil.which("cl.exe")
+    if compiler is None:
+        raise RuntimeError("Put the MSVC toolchain on PATH before building FFmpeg")
+    run(bash, "-c", r'''
+        export PATH="$(cygpath -u "$1"):/usr/bin:$PATH"
+        configure=$(cygpath -u "$2")
+        prefix=$(cygpath -u "$3")
+        jobs=$4
+        required_tools=$5
+        shift 5
+        # Keep MSVC's CRT flag out of the assembler's argument list.
+        export _CL_="${_CL_-} /MT"
+        for tool in $required_tools; do
+            if ! command -v "$tool" >/dev/null; then
+                echo "FFmpeg needs $tool in the MSYS2 build environment" >&2
+                exit 1
+            fi
+        done
+        configured_args=$(sed -n 's/^FFMPEG_CONFIGURATION=//p' ffbuild/config.mak 2>/dev/null | tr -d "'")
+        if ! grep -Fxq "SRC_PATH=${configure%/*}" ffbuild/config.mak 2>/dev/null ||
+           [ "$configured_args" != "--prefix=$prefix $*" ]; then
+            if ! sh "$configure" --prefix="$prefix" "$@"; then
+                tail -n 60 ffbuild/config.log >&2
+                exit 1
+            fi
+        fi
+        # Use FFmpeg's release number even when the sources are under another Git checkout.
+        export REVISION="$(cat "${configure%/*}/RELEASE")"
+        make -j"$jobs" && make install
+    ''', "ffmpeg-build", Path(compiler).parent, src / "configure", sdk,
+        args.parallel, required_tools, *options, cwd=build)
+    lib = sdk / "lib"
+    for component in FFMPEG_COMPONENTS:
+        pc = lib / "pkgconfig" / f"lib{component}.pc"
+        metadata = pc.read_text()
+        # FFmpeg uses a .a suffix even when lib.exe creates the COFF archive.
+        (lib / f"lib{component}.a").replace(lib / f"{component}.lib")
+        # Qt's FindFFmpeg consumes the -l entries in Libs from this file.
+        metadata = re.sub(r"(?<!\S)([\w-]+)\.lib(?=\s|$)", r"-l\1", metadata)
+        pc.write_text(re.sub(r"(?<!\S)-l(?:z|zlib)(?=\s|$)", "", metadata))
     return sdk
 
 
@@ -262,7 +334,7 @@ def prepare_build_environment(seed, install):
                  "PKG_CONFIG_PATH"):
         if name in os.environ:
             paths = [p for p in os.environ[name].split(os.pathsep)
-                     if p and not Path(p).resolve().is_relative_to(seed)]
+                     if p and (seed is None or not Path(p).resolve().is_relative_to(seed))]
             if paths:
                 os.environ[name] = os.pathsep.join(paths)
             else:
@@ -274,25 +346,43 @@ def prepare_build_environment(seed, install):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", choices=FFMPEG, default="6.11.2")
-    parser.add_argument("--seed", type=Path, required=True)
+    parser.add_argument("--seed", type=Path, help="Qt kit supplying FFmpeg for a shared build")
+    parser.add_argument("--static", action="store_true", help="Build Qt and FFmpeg statically on Windows")
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--install", type=Path, required=True)
     parser.add_argument("--parallel", type=int, default=2)
     parser.add_argument("--toolchain", choices=("msvc", "mingw", "native"), default="native")
     parser.add_argument("--arch", choices=("x64", "arm64"), default="x64")
     args = parser.parse_args()
-    args.seed, args.work, args.install = (p.resolve() for p in (args.seed, args.work, args.install))
+    args.work, args.install = args.work.resolve(), args.install.resolve()
+    if args.seed is not None:
+        args.seed = args.seed.resolve()
+    if args.static and (sys.platform != "win32" or args.toolchain != "msvc"):
+        parser.error("Static builds require Windows and MSVC")
+    if not args.static and args.seed is None:
+        parser.error("Shared builds require --seed")
     if args.install == args.seed:
         parser.error("The LTO installation must be separate from the seed kit")
     (args.install / "lto-build.json").unlink(missing_ok=True)
-    args.work.mkdir(parents=True, exist_ok=True)
-    sdk = ffmpeg_sdk(args)
+    directories = (args.work, args.install) if args.static else (args.work,)
+    for directory in directories:
+        exists = directory.exists()
+        directory.mkdir(parents=True, exist_ok=True)
+        if args.static and not exists and shutil.which("compact.exe"):
+            # NTFS compression keeps Qt's LTO objects and precompiled headers
+            # within the disk budget of a cold Windows source build.
+            subprocess.run(["compact.exe", "/C", "/Q", str(directory)], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sdk = None if args.static else ffmpeg_sdk(args)
     prepare_build_environment(args.seed, args.install)
     manifest = json.loads((SCRIPTS / "qt-source-hashes.json").read_text())[args.version]
-    common = ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=ON",
+    common = ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
+              f"-DBUILD_SHARED_LIBS={'OFF' if args.static else 'ON'}",
               "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON", "-DFEATURE_optimize_size=ON",
               "-DQT_BUILD_TESTS=OFF", "-DQT_BUILD_EXAMPLES=OFF", "-DQT_BUILD_BENCHMARKS=OFF",
               f"-DCMAKE_INSTALL_PREFIX={args.install.as_posix()}", f"-DCMAKE_PREFIX_PATH={args.install.as_posix()}"]
+    if args.static:
+        common += ["-DFEATURE_static_runtime=ON", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"]
     if sys.platform == "darwin":
         # Match Qt's supported deployment baseline instead of inheriting the
         # runner's OS version, where legacy capture APIs are already unavailable.
@@ -320,10 +410,12 @@ def main():
                      f"https://download.qt.io/official_releases/{source_path}",
                      checksum, archive.removesuffix(".tar.xz"),
                      fallback_url=f"https://download.qt.io/archive/{source_path}")
-        build = args.work / f"{module}-build"
+        build = args.work / f"{module}-{'static-' if args.static else ''}build"
         options = common.copy()
         if module == "qtbase":
             options += ["-DFEATURE_sql=OFF", "-DFEATURE_printsupport=OFF"]
+            if args.static:
+                options += ["-DFEATURE_schannel=ON", "-DFEATURE_openssl=OFF", "-DFEATURE_system_zlib=OFF"]
             if sys.platform.startswith("linux"):
                 # Desktop X11 playback does not need Qt Quick's embedded EGLFS
                 # screen-capture integration (an implicit dependency in Qt 6.8).
@@ -331,7 +423,33 @@ def main():
             if args.toolchain == "mingw":
                 patch_mingw(src)
                 options += [f"-DCMAKE_PROJECT_QtBase_INCLUDE={(SCRIPTS / 'qt-mingw-lto.cmake').as_posix()}"]
+        if args.static and module == "qtdeclarative":
+            # The player loads QtQuick and QtMultimedia. Skip optional QML
+            # modules and styles that would only add to the SDK build time.
+            unused_features = (
+                "qml_labs", "quick_dialogs", "quick_particles", "quick_vectorimage",
+                "quickcontrols2_fluentwinui3", "quickcontrols2_fusion", "quickcontrols2_imagine",
+                "quickcontrols2_material", "quickcontrols2_stylekit", "quickcontrols2_universal",
+                "quickcontrols2_windows",
+            )
+            options.extend(f"-DFEATURE_{feature}=OFF" for feature in unused_features)
+            tools_cmake = src / "tools/CMakeLists.txt"
+            tools = tools_cmake.read_text()
+            # Keep the QML import scanner, type registrar and cache generator.
+            optional_tools = ("qml|qmlcontextpropertydump|qmldom|qmleasing|qmlformat|qmllint|"
+                              "qmlpreview|qmlprofiler|qmltc|qmltestrunner")
+            required_tools = re.sub(rf"(?m)^ *add_subdirectory\(({optional_tools})\)\n", "", tools)
+            if required_tools != tools:
+                tools_cmake.write_text(required_tools)
+            qml_internals = src / "src/qml/Qt6QmlBuildInternals.cmake"
+            internals = qml_internals.read_text()
+            module_call = "    qt6_add_qml_module(${target}\n"
+            without_lint = module_call + "        NO_LINT\n"
+            if without_lint not in internals:
+                qml_internals.write_text(internals.replace(module_call, without_lint, 1))
         if module == "qtmultimedia":
+            if args.static:
+                options += ["-DFEATURE_native_windows_backend=OFF"]
             demuxer = src / "src/plugins/multimedia/ffmpeg/playbackengine/qffmpegdemuxer.cpp"
             shutil.copyfile(SCRIPTS / "matroskaaudiopreroll.h", demuxer.with_name("matroskaaudiopreroll.h"))
             demuxer.write_text(fix_audio_seek(demuxer.read_text()))
@@ -342,7 +460,8 @@ def main():
                 d3d11.write_text(fix_d3d11(d3d11.read_text()))
             if args.toolchain == "msvc":
                 patch_msvc_multimedia(src)
-            options += [f"-DFFMPEG_DIR={sdk.as_posix()}", "-DQT_DEPLOY_FFMPEG=ON", "-DFEATURE_ffmpeg=ON",
+            options += [f"-DFFMPEG_DIR={sdk.as_posix()}",
+                        f"-DQT_DEPLOY_FFMPEG={'OFF' if args.static else 'ON'}", "-DFEATURE_ffmpeg=ON",
                         "-DFEATURE_spatialaudio=OFF",
                         # Clear these cached settings when upgrading an existing work directory.
                         "-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Qml=OFF", "-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Quick=OFF"]
@@ -358,8 +477,12 @@ def main():
         run("cmake", "--build", build, "--parallel", args.parallel)
         run("cmake", "--install", build, "--strip")
         records[module] = {"sha256": checksum, "lto": True, "optimize_size": True}
+        if args.static and module == "qtbase":
+            sdk = static_ffmpeg_sdk(args)
     # Cached installs retain evidence of the checked source build configuration.
-    (args.install / "lto-build.json").write_text(json.dumps({"qt": args.version, "modules": records}, indent=2))
+    (args.install / "lto-build.json").write_text(json.dumps({
+        "qt": args.version, "static": args.static, "modules": records,
+    }, indent=2))
 
 
 if __name__ == "__main__":

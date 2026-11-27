@@ -35,7 +35,7 @@ try {
         Start-Sleep -Milliseconds 100
     }
     if (!$playerProcess.WaitForExit(120000)) { throw 'The player did not close in time.' }
-    # The portable launcher's parent process exits just after the player does.
+    # Older portable launchers exit just after their player process does.
     for ($attempt = 0; $attempt -lt 40; $attempt++) {
         try {
             [IO.File]::Replace($source, $target, [System.Management.Automation.Language.NullString]::Value)
