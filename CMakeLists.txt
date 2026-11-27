@@ -133,6 +133,15 @@ if(BUILD_TESTING)
     add_test(NAME fileassociation_tests COMMAND fileassociation_tests)
     set_target_properties(instance_tests updater_tests fileassociation_tests
         PROPERTIES QT_QML_MODULE_NO_IMPORT_SCAN ON)
+    if(MSVC)
+        foreach(test_target IN ITEMS player_tests instance_tests updater_tests fileassociation_tests)
+            set_target_properties(${test_target} PROPERTIES
+                INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
+                INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL OFF)
+            # MSVC otherwise enables LTCG when a linked library contains /GL objects.
+            target_link_options(${test_target} PRIVATE "$<$<CONFIG:Release,MinSizeRel>:/LTCG:OFF>")
+        endforeach()
+    endif()
     if(VIDEO_PLAYER_STATIC_WINDOWS)
         foreach(test_target IN ITEMS instance_tests updater_tests fileassociation_tests)
             qt_import_plugins(${test_target} NO_DEFAULT)
