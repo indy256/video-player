@@ -497,7 +497,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         const int leadMs = audioDelta->value() * timingStepMs;
         const QString offset = leadMs == 0 ? QStringLiteral("in sync") : QString::asprintf("%+.2f s", leadMs / 1000.0);
         externalAudio->setOffset(leadMs);
-        audioDeltaLabel->setText(QStringLiteral("Audio Δ ") + offset);
+        audioDeltaLabel->setText(QStringLiteral("Audio ") + offset);
         return leadMs;
     };
     // The saved setting measures delay, the inverse of the displayed lead.

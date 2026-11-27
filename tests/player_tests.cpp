@@ -732,11 +732,11 @@ private slots:
         QCOMPARE(video->position(), qint64(3000));
         auto *readout = window.findChild<QLabel *>("audioDeltaReadout");
         QVERIFY(readout);
-        QCOMPARE(readout->text(), QStringLiteral("Audio Δ +1.00 s"));
+        QCOMPARE(readout->text(), QStringLiteral("Audio +1.00 s"));
         QTest::mouseClick(delta, Qt::LeftButton, Qt::NoModifier, QPoint(0, delta->height() / 2));
         QTRY_COMPARE(audio->position(), qint64(2000));
         QCOMPARE(video->position(), qint64(3000));
-        QCOMPARE(readout->text(), QStringLiteral("Audio Δ -1.00 s"));
+        QCOMPARE(readout->text(), QStringLiteral("Audio -1.00 s"));
         const auto audioAtOffset = [&](qint64 leadMs) {
             return qAbs(audio->position() - (video->position() + leadMs)) < 250;
         };
@@ -776,7 +776,7 @@ private slots:
         QTest::mouseRelease(delta, Qt::LeftButton);
         QCOMPARE(delta->value(), 0);
         QCOMPARE(external->offset(), qint64(0));
-        QCOMPARE(readout->text(), QStringLiteral("Audio Δ in sync"));
+        QCOMPARE(readout->text(), QStringLiteral("Audio in sync"));
         if (externalTrack) {
             QCOMPARE(audio->source(), QUrl::fromLocalFile(clip));
             QTRY_VERIFY(audioAtOffset(0));
@@ -2406,7 +2406,7 @@ private slots:
             auto *sync = window.findChild<QSlider *>("audioDelta");
             QCOMPARE(sync->value(), 10);
             QCOMPARE(window.findChild<ExternalAudio *>()->offset(), qint64(500));
-            QCOMPARE(window.findChild<QLabel *>("audioDeltaReadout")->text(), QStringLiteral("Audio Δ +0.50 s"));
+            QCOMPARE(window.findChild<QLabel *>("audioDeltaReadout")->text(), QStringLiteral("Audio +0.50 s"));
             window.openFile(first);
             QCOMPARE(volume->value(), 85);
             QCOMPARE(gamma->value(), 23);
