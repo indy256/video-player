@@ -1,4 +1,4 @@
-"""Build the player's Qt modules with LTO from checksum-pinned sources.
+"""Build the player's optimized Qt modules from checksum-pinned sources.
 
 Requires Python 3.12+, CMake, Ninja, and a native C/C++ toolchain on PATH.
 The Qt video decoder patches also require Git.
@@ -363,6 +363,8 @@ def main():
     parser.add_argument("--version", choices=FFMPEG, default="6.11.2")
     parser.add_argument("--seed", type=Path, help="Qt kit supplying FFmpeg for a shared build")
     parser.add_argument("--static", action="store_true", help="Build Qt and FFmpeg statically on Windows")
+    parser.add_argument("--no-qt-lto", action="store_true",
+                        help="Compile static Qt to native machine code before linking the player")
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--install", type=Path, required=True)
     parser.add_argument("--parallel", type=int, default=2)
@@ -376,24 +378,29 @@ def main():
         parser.error("Static builds require Windows and MSVC")
     if not args.static and args.seed is None:
         parser.error("Shared builds require --seed")
+    if args.no_qt_lto and not args.static:
+        parser.error("--no-qt-lto requires --static")
     if args.install == args.seed:
-        parser.error("The LTO installation must be separate from the seed kit")
+        parser.error("The installation must be separate from the seed kit")
     (args.install / "lto-build.json").unlink(missing_ok=True)
     directories = (args.work, args.install) if args.static else (args.work,)
     for directory in directories:
         exists = directory.exists()
         directory.mkdir(parents=True, exist_ok=True)
         if args.static and not exists and shutil.which("compact.exe"):
-            # NTFS compression keeps Qt's LTO objects and precompiled headers
+            # NTFS compression keeps Qt's objects and precompiled headers
             # within the disk budget of a cold Windows source build.
             subprocess.run(["compact.exe", "/C", "/Q", str(directory)], check=False,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     sdk = None if args.static else ffmpeg_sdk(args)
     prepare_build_environment(args.seed, args.install)
     manifest = json.loads((SCRIPTS / "qt-source-hashes.json").read_text())[args.version]
+    use_lto = not args.no_qt_lto
+    lto_setting = "(ON|TRUE|1)" if use_lto else "(OFF|FALSE|0)"
     common = ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
               f"-DBUILD_SHARED_LIBS={'OFF' if args.static else 'ON'}",
-              "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON", "-DFEATURE_optimize_size=ON",
+              f"-DCMAKE_INTERPROCEDURAL_OPTIMIZATION={'ON' if use_lto else 'OFF'}",
+              "-DFEATURE_optimize_size=ON",
               "-DQT_BUILD_TESTS=OFF", "-DQT_BUILD_EXAMPLES=OFF", "-DQT_BUILD_BENCHMARKS=OFF",
               f"-DCMAKE_INSTALL_PREFIX={args.install.as_posix()}", f"-DCMAKE_PREFIX_PATH={args.install.as_posix()}"]
     if args.static:
@@ -483,16 +490,16 @@ def main():
                         "-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Qml=OFF", "-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Quick=OFF"]
         run("cmake", "-S", src, "-B", build, *options)
         cache = (build / "CMakeCache.txt").read_text()
-        if not re.search(r"^CMAKE_INTERPROCEDURAL_OPTIMIZATION:[^=]+=(ON|TRUE|1)$", cache, re.M):
-            raise RuntimeError(f"LTO was not enabled for {module}")
-        if module == "qtbase" and not re.search(r"^QT_FEATURE_ltcg:INTERNAL=(ON|TRUE|1)$", cache, re.M):
-            raise RuntimeError("Qt did not enable its LTCG feature")
+        if not re.search(rf"^CMAKE_INTERPROCEDURAL_OPTIMIZATION:[^=]+={lto_setting}$", cache, re.M):
+            raise RuntimeError(f"Unexpected CMake IPO setting for {module}")
+        if module == "qtbase" and not re.search(rf"^QT_FEATURE_ltcg:INTERNAL={lto_setting}$", cache, re.M):
+            raise RuntimeError("Unexpected QtBase LTCG feature")
         ninja = (build / "build.ninja").read_text()
-        if not re.search(r"(-flto|[-/]GL)([= ;\n]|$)", ninja):
-            raise RuntimeError(f"Missing compiler LTO flags for {module}")
+        if bool(re.search(r"(-flto|[-/]GL)([= ;\n]|$)", ninja)) != use_lto:
+            raise RuntimeError(f"Unexpected compiler LTO flags for {module}")
         run("cmake", "--build", build, "--parallel", args.parallel)
         run("cmake", "--install", build, "--strip")
-        records[module] = {"sha256": checksum, "lto": True, "optimize_size": True}
+        records[module] = {"sha256": checksum, "lto": use_lto, "optimize_size": True}
         if args.static and module == "qtbase":
             sdk = static_ffmpeg_sdk(args)
     # Cached installs retain evidence of the checked source build configuration.

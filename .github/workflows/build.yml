@@ -13,6 +13,8 @@ jobs:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 240
+    env:
+      QT_KIT_DIR: ${{ matrix.msvc-arch && '.qt-static' || '.qt-lto' }}
     strategy:
       fail-fast: false
       matrix:
@@ -109,23 +111,23 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('key=' + hashlib.sha256(identity.encode()).hexdigest() + '\n')
 
-      - name: Restore Qt built with LTO
-        id: qt-lto
+      - name: Restore Qt kit
+        id: qt-kit
         uses: actions/cache/restore@v5
         with:
-          path: .qt-lto
-          key: qt-lto-${{ runner.os }}-${{ runner.arch }}-${{ matrix.qt-version }}-${{ steps.qt-toolchain.outputs.key }}-${{ hashFiles('scripts/build-qt-lto.py', 'scripts/qt-source-hashes.json', 'scripts/matroskaaudiopreroll.h', 'scripts/qt-mingw-lto.cmake', 'scripts/qt-mingw-avx.s', 'scripts/qt-video-decoder-handoff_p.h', format('scripts/qt-{0}-decoder-handoff.patch', matrix.qt-version)) }}
+          path: ${{ env.QT_KIT_DIR }}
+          key: qt-${{ matrix.msvc-arch && 'static-native' || 'lto' }}-${{ runner.os }}-${{ runner.arch }}-${{ matrix.qt-version }}-${{ steps.qt-toolchain.outputs.key }}-${{ hashFiles('scripts/build-qt-lto.py', 'scripts/qt-source-hashes.json', 'scripts/matroskaaudiopreroll.h', 'scripts/qt-mingw-lto.cmake', 'scripts/qt-mingw-avx.s', 'scripts/qt-video-decoder-handoff_p.h', format('scripts/qt-{0}-decoder-handoff.patch', matrix.qt-version)) }}
 
       - name: Install Windows FFmpeg build tools
-        if: runner.os == 'Windows' && steps.qt-lto.outputs.cache-hit != 'true'
+        if: runner.os == 'Windows' && steps.qt-kit.outputs.cache-hit != 'true'
         id: msys2
         uses: msys2/setup-msys2@3c51bf698df1e37b2261f53cb67797b97761185c # v2
         with:
           msystem: MSYS
           install: make ${{ matrix.msvc-arch == 'x64' && 'mingw-w64-ucrt-x86_64-nasm' || '' }}
 
-      - name: Build Qt modules with LTO
-        if: steps.qt-lto.outputs.cache-hit != 'true'
+      - name: Build Qt kit
+        if: steps.qt-kit.outputs.cache-hit != 'true'
         shell: python {0}
         env:
           QT_SOURCE_VERSION: ${{ matrix.qt-version }}
@@ -134,8 +136,8 @@ jobs:
           import os, pathlib, subprocess, sys
           command = [
               sys.executable, 'scripts/build-qt-lto.py', '--version', os.environ['QT_SOURCE_VERSION'],
-              '--work', os.environ['RUNNER_TEMP'] + '/qt-lto',
-              '--install', str(pathlib.Path('.qt-lto').resolve()), '--parallel', '2',
+              '--work', os.environ['RUNNER_TEMP'] + '/qt-build',
+              '--install', str(pathlib.Path(os.environ['QT_KIT_DIR']).resolve()), '--parallel', '2',
               '--toolchain', 'msvc' if os.name == 'nt' else 'native',
               '--arch', os.environ['RUNNER_ARCH'].lower(),
           ]
@@ -143,27 +145,29 @@ jobs:
               msys = pathlib.Path(os.environ['MSYS2_LOCATION'])
               os.environ['MSYS2_BASH'] = str(msys / 'usr/bin/bash.exe')
               os.environ['PATH'] += os.pathsep + str(msys / 'ucrt64/bin')
-              command += ['--static']
+              # Cache Qt machine code for reuse by every executable link.
+              command += ['--static', '--no-qt-lto']
           else:
               command += ['--seed', os.environ['QT_ROOT_DIR']]
           subprocess.run(command, check=True)
 
       - name: Cache completed Qt source build
-        if: steps.qt-lto.outputs.cache-hit != 'true'
+        if: steps.qt-kit.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: .qt-lto
-          key: ${{ steps.qt-lto.outputs.cache-primary-key }}
+          path: ${{ env.QT_KIT_DIR }}
+          key: ${{ steps.qt-kit.outputs.cache-primary-key }}
 
-      - name: Select Qt built with LTO
+      - name: Select Qt kit
         shell: python {0}
         run: |
           import json, os, pathlib
-          root = pathlib.Path('.qt-lto').resolve()
-          seed = pathlib.Path(os.environ['QT_ROOT_DIR']).resolve() if os.name != 'nt' else None
+          root = pathlib.Path(os.environ['QT_KIT_DIR']).resolve()
+          static = os.name == 'nt'
+          seed = None if static else pathlib.Path(os.environ['QT_ROOT_DIR']).resolve()
           manifest = json.loads((root / 'lto-build.json').read_text())
-          assert all(item['lto'] for item in manifest['modules'].values())
-          assert manifest['static'] == (os.name == 'nt')
+          assert manifest['static'] == static
+          assert all(item['lto'] == (not static) for item in manifest['modules'].values())
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               for key in ('QT_ROOT_DIR', 'QTDIR', 'CMAKE_PREFIX_PATH'):
                   output.write(f'{key}={root.as_posix()}\n')
@@ -186,12 +190,12 @@ jobs:
         env:
           RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
-          extra=()
+          extra=(-DVIDEO_PLAYER_REQUIRE_QT_LTO=ON)
           if [[ "$RUNNER_OS" == Windows ]]; then
-            extra=(-DVIDEO_PLAYER_STATIC_WINDOWS=ON -DFFMPEG_DIR="$PWD/.qt-lto/ffmpeg")
+            extra=(-DVIDEO_PLAYER_REQUIRE_QT_LTO=OFF -DVIDEO_PLAYER_STATIC_WINDOWS=ON -DFFMPEG_DIR="$PWD/$QT_KIT_DIR/ffmpeg")
           fi
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$PWD/.qt-lto" -DVIDEO_PLAYER_REQUIRE_QT_LTO=ON \
+            -DCMAKE_PREFIX_PATH="$PWD/$QT_KIT_DIR" \
             -DBUILD_TESTING=ON -DVIDEO_PLAYER_DEPLOY=ON \
             -DVIDEO_PLAYER_VERSION="$RELEASE_VERSION" "${extra[@]}"
 
