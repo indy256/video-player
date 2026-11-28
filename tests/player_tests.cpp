@@ -2744,6 +2744,7 @@ private slots:
         auto *volumeLabel = window.findChild<QLabel *>("volumeReadout");
         QVERIFY(video && button && files && readout && volumeLabel);
 
+        readout->setStyleSheet("font-size: 20px;");
         window.resize(window.minimumSize());
         window.show();
         const QString example = qEnvironmentVariable("VIDEO_PLAYER_DECODING_SWITCH_EXAMPLE");

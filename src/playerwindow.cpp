@@ -342,7 +342,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     setAutoFillBackground(true);
     setWindowTitle(QStringLiteral("Video Player v" VIDEO_PLAYER_VERSION));
     resize(1100, 740);
-    setMinimumSize(680, 440);
+    setMinimumHeight(440);
     setAcceptDrops(true);
     player = new QMediaPlayer(this);
     player->setObjectName("mediaPlayer");
@@ -436,6 +436,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QMessageBox::warning(this, "Cannot play subtitles", message);
     }, Qt::QueuedConnection);
     auto *screen = new QWidget;
+    screen->setMinimumWidth(680);
     auto *screenLayout = new QHBoxLayout(screen);
     screenLayout->setContentsMargins(0, 0, 0, 0);
     screenLayout->setSpacing(0);
@@ -481,6 +482,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     timeLabel = new QLabel;
     timeLabel->setObjectName("timeReadout");
     timeLabel->setAccessibleName("Current and total time, video codec and resolution");
+    timeLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     volume = addSlider("volume", "Volume", 1);
     volume->setSingleStep(5);
     volume->setRange(0, 100);
