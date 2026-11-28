@@ -2,6 +2,9 @@
 #pragma once
 
 #include <QFileInfo>
+#include <algorithm>
+
+static constexpr int64_t audioPrerollUs = 250'000;
 
 static int seekWithAudioPreroll(AVFormatContext *ctx, int64_t target, bool hasAudio, QObject &demuxer)
 {
@@ -9,9 +12,15 @@ static int seekWithAudioPreroll(AVFormatContext *ctx, int64_t target, bool hasAu
     auto seekNormally = [&] { return av_seek_frame(ctx, -1, target, AVSEEK_FLAG_BACKWARD); };
     demuxer.setProperty("audioPrerollKey", {});
     const int result = seekNormally();
+    if (result < 0 || !hasAudio)
+        return result;
     const QByteArrayView format(ctx->iformat->name);
-    const bool avi = format == "avi";
-    if (result < 0 || !hasAudio || (!avi && !format.startsWith("matroska")))
+    const bool matroska = format.startsWith("matroska");
+    const bool mp4Opus = format.startsWith("mov,mp4,")
+        && std::any_of(ctx->streams, ctx->streams + ctx->nb_streams, [](const AVStream *stream) {
+            return stream->codecpar->codec_id == AV_CODEC_ID_OPUS;
+        });
+    if (!matroska && format != "avi" && !mp4Opus)
         return result;
     const int track = av_find_default_stream_index(ctx);
     if (track < 0 || ctx->streams[track]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
@@ -24,12 +33,13 @@ static int seekWithAudioPreroll(AVFormatContext *ctx, int64_t target, bool hasAu
     const auto *cue = avformat_index_get_entry(stream, index);
     // Matroska laces can span a cue. AVI chunk boundaries can split a
     // compressed audio frame. An AVI index also includes non-key video chunks.
-    const int64_t warmupUs = avi ? 250000 : 500000;
+    // MP4 seeks align Opus packets to the video keyframe, losing decoder history.
+    const int64_t warmupUs = matroska ? 500'000 : audioPrerollUs;
     if (!cue || av_compare_ts(pts - cue->timestamp, stream->time_base, warmupUs, AV_TIME_BASE_Q) > 0
         || !QFileInfo(QString::fromUtf8(ctx->url)).isFile())
         return result;
     int previousKey = index - 1;
-    if (avi) {
+    if (!matroska) {
         const int64_t warmupTicks = qMax<int64_t>(1, av_rescale_q(warmupUs, AV_TIME_BASE_Q, stream->time_base));
         previousKey = qMax(0, av_index_search_timestamp(stream, pts - warmupTicks, AVSEEK_FLAG_BACKWARD));
     }
@@ -53,24 +63,28 @@ static int readWithAudioPreroll(AVFormatContext *ctx, AVPacket *packet, int64_t 
 {
     bool preroll;
     const auto key = demuxer.property("audioPrerollKey").toLongLong(&preroll);
-    const int video = preroll ? av_find_default_stream_index(ctx) : -1;
+    if (!preroll)
+        return av_read_frame(ctx, packet);
+    const int video = av_find_default_stream_index(ctx);
+    // AVI and MOV seek tables store decoding timestamps.
+    const bool matroska = QByteArrayView(ctx->iformat->name).startsWith("matroska");
     for (;;) {
         const int result = av_read_frame(ctx, packet);
-        if (result < 0 || !preroll)
+        if (result < 0)
             return result;
         const auto *stream = ctx->streams[packet->stream_index];
         const auto *codec = stream->codecpar;
         if (codec->codec_type == AVMEDIA_TYPE_AUDIO) {
             const auto warmup = codec->sample_rate > 0
                 ? av_rescale(codec->seek_preroll, AV_TIME_BASE, codec->sample_rate) : 0;
-            const auto cutoff = target - qMax<int64_t>(250000, warmup);
+            const auto cutoff = target - qMax(audioPrerollUs, warmup);
             if (packet->pts == AV_NOPTS_VALUE || packet->duration <= 0
                 || av_compare_ts(packet->pts + packet->duration, stream->time_base,
                                  cutoff, AV_TIME_BASE_Q) >= 0)
                 return result;
         } else if (packet->stream_index == video) {
             // Resume ordinary demuxing even with a missing or mislabelled cue.
-            const auto timestamp = QByteArrayView(ctx->iformat->name) == "avi" ? packet->dts : packet->pts;
+            const auto timestamp = matroska ? packet->pts : packet->dts;
             const bool reachedCue = timestamp != AV_NOPTS_VALUE && timestamp >= key;
             if (timestamp == AV_NOPTS_VALUE || (reachedCue && ((packet->flags & AV_PKT_FLAG_KEY)
                 || av_compare_ts(timestamp - key, stream->time_base, 500000, AV_TIME_BASE_Q) > 0))) {

@@ -27,6 +27,7 @@
 #include <QGridLayout>
 #include <QLabel>
 #include <QMimeData>
+#include <QMediaFormat>
 #include <QMediaMetaData>
 #include <QDir>
 #include <QMessageBox>
@@ -1195,18 +1196,23 @@ bool PlayerWindow::atEnd() const {
 }
 
 void PlayerWindow::seekTo(qint64 position, bool prepareVideo) {
+    const qint64 duration = player->duration();
     const bool playing = player->isPlaying() || (pendingPlayback && pendingPlayback->play)
-        || (atEnd() && position < player->duration());
+        || (atEnd() && position < duration);
     if (position == player->position() && (!pendingPlayback || pendingPlayback->position == position)) return;
     cancelPendingPlayback();
-    // There is no new video frame to wait for at the exact end or in audio-only media.
-    const bool prepare = prepareVideo && player->hasVideo() && position < player->duration();
+    const auto videoTrack = player->videoTracks().value(player->activeVideoTrack());
+    const bool av1 = videoTrack.value(QMediaMetaData::VideoCodec)
+        .value<QMediaFormat::VideoCodec>() == QMediaFormat::VideoCodec::AV1;
+    // The audio track can continue past the last AV1 frame.
+    const qint64 videoDuration = videoTrack.value(QMediaMetaData::Duration).toLongLong();
+    const qint64 videoEnd = av1 && videoDuration > 0 ? qMin(duration, videoDuration) : duration;
+    const bool prepare = (prepareVideo || av1) && player->hasVideo() && position < videoEnd;
     if (prepare) {
         pendingPlayback = PlaybackRequest{playing, position};
         player->pause();
-        // A precise jump deep inside a GOP can take seconds to decode. Give video
-        // a head start, then let the audio renderer run as soon as it has samples.
-        if (playing && (player->hasAudio() || !externalAudio->filePath().isEmpty()))
+        // Starting the clock during AV1 preroll can make overdue frames arrive in a burst.
+        if (!av1 && playing && (player->hasAudio() || !externalAudio->filePath().isEmpty()))
             seekAudioTimer->start(120);
     }
     embeddedSubtitles->seek();

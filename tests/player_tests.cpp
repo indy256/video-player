@@ -1236,8 +1236,13 @@ private slots:
         if (path.isEmpty()) QSKIP("Requires a local indexed AVI with continuous audio");
         verifyIndexedAudioSeek(path);
     }
+    void opusAudioSeekExample() {
+        const QString path = qEnvironmentVariable("VIDEO_PLAYER_OPUS_SEEK_EXAMPLE");
+        if (path.isEmpty()) QSKIP("Requires a local indexed MP4 with continuous Opus audio");
+        verifyIndexedAudioSeek(path, true);
+    }
 private:
-    void verifyIndexedAudioSeek(const QString &path) {
+    void verifyIndexedAudioSeek(const QString &path, bool compareSamples = false) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
         PlayerWindow window;
         window.show();
@@ -1246,23 +1251,53 @@ private:
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
         auto *timeline = window.findChild<SeekSlider *>("timeline");
         auto *index = window.findChild<KeyframeIndex *>();
-        QAudioBufferOutput buffers;
+        QAudioFormat format;
+        if (compareSamples) {
+            format.setSampleRate(48000);
+            format.setChannelConfig(QAudioFormat::ChannelConfigStereo);
+            format.setSampleFormat(QAudioFormat::Float);
+        }
+        QAudioBufferOutput buffers(format);
         player->setAudioBufferOutput(&buffers);
         window.openFile(path);
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && index->isReady(), 15000);
-        for (int percent : {73, 14, 53, 27, 89, 43, 18, 70}) {
+        const QList<int> percentages = compareSamples ? QList<int>{20}
+            : QList<int>{73, 14, 53, 27, 89, 43, 18, 70};
+        for (int percent : percentages) {
             const int value = timeline->maximum() * percent / 100;
-            const qint64 target = index->seekPosition(qRound64(value * (double(player->duration())
-                / timeline->maximum()))) * 1000;
-            bool heardTarget = false;
+            const qint64 position = index->seekPosition(qRound64(double(player->duration()) * value
+                                                                / timeline->maximum()));
+            const qint64 target = position * 1000;
+            QAudioBuffer sample;
             QObject observer;
             connect(&buffers, &QAudioBufferOutput::audioBufferReceived, &observer,
                     [&](const QAudioBuffer &buffer) {
                 if (buffer.isValid() && buffer.startTime() <= target
-                    && buffer.startTime() + buffer.duration() > target) heardTarget = true;
+                    && buffer.startTime() + buffer.duration() > target) sample = buffer;
             });
+            QAudioBuffer reference;
+            if (compareSamples) {
+                QVERIFY(position >= 600 && position + 200 < player->duration());
+                player->setPosition(position - 600);
+                QTRY_VERIFY_WITH_TIMEOUT(sample.isValid() && player->position() >= position + 200, 10000);
+                reference = std::exchange(sample, QAudioBuffer{});
+            }
             timeline->setValue(value);
-            QTRY_VERIFY_WITH_TIMEOUT(heardTarget, 3000);
+            QTRY_VERIFY_WITH_TIMEOUT(sample.isValid(), compareSamples ? 10000 : 3000);
+            if (!compareSamples) continue;
+
+            QCOMPARE(sample.startTime(), reference.startTime());
+            QCOMPARE(sample.sampleCount(), reference.sampleCount());
+            const auto *expected = reference.constData<float>();
+            const auto *actual = sample.constData<float>();
+            double energy = 0, error = 0;
+            for (int i = 0; i < sample.sampleCount(); ++i) {
+                const double difference = actual[i] - expected[i];
+                energy += double(expected[i]) * expected[i];
+                error += difference * difference;
+            }
+            QVERIFY(energy > 0.01);
+            QVERIFY2(error < energy * 0.01, "The first Opus packet after seeking must match continuous playback");
         }
 #else
         QSKIP("Audio buffer monitoring requires Qt 6.8");
@@ -3003,6 +3038,34 @@ private slots:
             const double displayError = meanRgbError(display.copy(pixels).scaled(expected.size()), expected);
             qInfo() << "AV1 displayed RGB mean absolute error:" << displayError;
             QVERIFY2(displayError < 15, "The displayed AV1 frame must match the decoded image");
+        }
+    }
+    void av1SeekingWaitsForVideo() {
+        const QString movie = qEnvironmentVariable("VIDEO_PLAYER_AV1_EXAMPLE");
+        if (movie.isEmpty()) QSKIP("Set VIDEO_PLAYER_AV1_EXAMPLE to an AV1 video with audio");
+        PlayerWindow window;
+        window.show();
+        window.findChild<QAction *>("keyframeSeeking")->setChecked(false);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *video = window.findChild<VideoSurface *>();
+        auto *timeline = window.findChild<SeekSlider *>("timeline");
+        auto *forward = window.findChild<QAction *>("forward3");
+        window.openFile(movie);
+        QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying() && player->isSeekable(), 15000);
+        if (!player->hasAudio() || player->duration() < 8000)
+            QSKIP("The seek example needs at least eight seconds of video with audio");
+
+        for (const bool keyboard : {false, true}) {
+            QSignalBlocker blocker(video);
+            if (keyboard) forward->trigger();
+            else timeline->setValue(timeline->maximum() / 4);
+            const qint64 target = player->position() * 1000;
+            QTest::qWait(250);
+            QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+            QTRY_VERIFY_WITH_TIMEOUT(qAbs(video->videoSink()->videoFrame().startTime() - target) < 100000, 5000);
+            blocker.unblock();
+            video->videoFrameChanged(video->videoSink()->videoFrame());
+            QTRY_VERIFY(player->isPlaying());
         }
     }
     void gpuGammaPlayback() {
