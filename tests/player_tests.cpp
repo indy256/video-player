@@ -2748,7 +2748,14 @@ private slots:
         window.resize(window.minimumSize());
         window.show();
         const QString example = qEnvironmentVariable("VIDEO_PLAYER_DECODING_SWITCH_EXAMPLE");
-        window.openFile(example.isEmpty() ? clip : example);
+        QString source = example;
+        if (source.isEmpty()) {
+            // Leave the audio renderer behind the video at the initial playback position.
+            source = temp.filePath("decoder-audio-gap.mp4");
+            QCOMPARE(QProcess::execute("ffmpeg", {"-v", "error", "-i", clip, "-c:v", "copy",
+                "-af", "aselect=not(between(t\\,3\\,5))", "-c:a", "aac", "-y", source}), 0);
+        }
+        window.openFile(source);
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
         auto *gamma = window.findChild<QSlider *>("gamma");
         QTRY_VERIFY(player->isPlaying() && video->videoSink()->videoFrame().isValid());
@@ -2786,6 +2793,7 @@ private slots:
             QCOMPARE(player->position(), position);
             QCOMPARE(gamma->value(), 16);
         }
+        QTest::qWait(150);
         QTRY_VERIFY(video->videoSink()->videoFrame().isValid());
         QCOMPARE_LE(qAbs(video->videoSink()->videoFrame().startTime() - originalFrame.startTime()), 50000);
         player->play();

@@ -280,7 +280,7 @@
  
          if (!maybeCodecContext) {
              emit errorOccured(QMediaPlayer::FormatError,
-@@ -484,13 +488,39 @@
+@@ -484,13 +488,43 @@
      if (prev == sink)
          return;
  
@@ -317,9 +317,13 @@
 +
 +void PlaybackEngine::prepareVideoDecoderChange()
 +{
-+    const auto position = currentPosition(false);
++    const auto &video = m_renderers[QPlatformMediaPlayer::VideoStream];
++    const auto offset = m_currentLoopOffset.loopStartTimeUs.asDuration();
++    // Audio can lag behind the visible frame when paused.
++    const auto position = m_state == QMediaPlayer::PausedState && video
++            ? boundPosition(video->lastPosition() - offset) : currentPosition(false);
 +    m_codecContexts[QPlatformMediaPlayer::VideoStream] = {};
-+    m_timeController.sync(m_currentLoopOffset.loopStartTimeUs.asDuration() + position);
++    m_timeController.sync(offset + position);
 +    m_seekPending = true;
  }
  
