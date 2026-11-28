@@ -96,10 +96,12 @@ private:
     QMenu *commandsMenu;
     QByteArray windowedGeometry;
     int wheelRemainder = 0;
-    bool mousePressed = false;
-    bool draggingWindow = false;
-    QPoint dragStartMouse;
-    QPoint dragStartWindow;
+    struct WindowPress {
+        QPoint mouse;
+        QPoint window;
+        bool moved = false;
+    };
+    std::optional<WindowPress> windowPress;
     struct PlaybackRequest {
         bool play;
         std::optional<qint64> position;

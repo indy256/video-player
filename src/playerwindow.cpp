@@ -361,7 +361,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     stage = new QStackedWidget;
     stage->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto *empty = new QWidget;
-    empty->installEventFilter(this);
     empty->setObjectName("emptyStage");
     auto *emptyLayout = new QVBoxLayout(empty);
     emptyLayout->addStretch();
@@ -389,7 +388,6 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     clickTimer->setSingleShot(true);
     clickTimer->setTimerType(Qt::PreciseTimer);
     connect(clickTimer, &QTimer::timeout, this, &PlayerWindow::togglePlayback);
-    video->installEventFilter(this);
     stage->addWidget(video);
     notification = new QLabel(this);
     configureOverlay(notification, "actionNotification");
@@ -687,6 +685,8 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         for (auto *action : tracks) action->setEnabled(playbackReady());
         update->setEnabled(!updating);
     });
+    QWidget *const backgrounds[] = {this, page, screen, stage, empty, video, folderPanel, controlsPanel};
+    for (auto *background : backgrounds) background->installEventFilter(this);
     updateControls();
     updateTimeline();
 #ifdef Q_OS_WIN
@@ -975,7 +975,7 @@ bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
         static_cast<QSlider *>(watched)->setValue(watched == gamma ? 10 : 0);
         return true;
     }
-    if (event->type() == QEvent::ContextMenu) {
+    if (watched != this && event->type() == QEvent::ContextMenu) {
         const auto *context = static_cast<QContextMenuEvent *>(event);
         showPopupMenu(context->globalPos());
         return true;
@@ -984,44 +984,52 @@ bool PlayerWindow::eventFilter(QObject *watched, QEvent *event) {
         wheelEvent(static_cast<QWheelEvent *>(event));
         return true;
     }
-    const bool dragSurface = watched == video || watched == stage->widget(0);
-    if (dragSurface && event->type() == QEvent::MouseMove && mousePressed) {
+    if (qobject_cast<QSlider *>(watched)) return QMainWindow::eventFilter(watched, event);
+
+    switch (event->type()) {
+    case QEvent::MouseMove: {
+        if (!windowPress) break;
         const auto *mouse = static_cast<QMouseEvent *>(event);
-        const QPoint delta = mouse->globalPosition().toPoint() - dragStartMouse;
-        if (draggingWindow || delta.manhattanLength() >= QApplication::startDragDistance()) {
-            if (!draggingWindow) {
-                draggingWindow = true;
-                clickTimer->stop();
-            }
-            if (!isFullScreen() && !isMaximized()) move(dragStartWindow + delta);
+        if (!(mouse->buttons() & Qt::LeftButton)) {
+            windowPress.reset();
+            break;
+        }
+        const QPoint delta = mouse->globalPosition().toPoint() - windowPress->mouse;
+        if (!windowPress->moved && delta.manhattanLength() >= QApplication::startDragDistance()) {
+            windowPress->moved = true;
+            clickTimer->stop();
+        }
+        if (windowPress->moved && !isFullScreen() && !isMaximized()) move(windowPress->window + delta);
+        return true;
+    }
+    case QEvent::MouseButtonPress:
+    case QEvent::MouseButtonDblClick: {
+        const auto *mouse = static_cast<QMouseEvent *>(event);
+        if (mouse->button() != Qt::LeftButton) break;
+        const auto *surface = static_cast<QWidget *>(watched);
+        const QPoint global = mouse->globalPosition().toPoint();
+        // A control can propagate ignored clicks. VideoSurface forwards its renderer's clicks.
+        if (surface != video && surface->childAt(surface->mapFromGlobal(global))) break;
+        if (event->type() == QEvent::MouseButtonDblClick && (surface == video || surface == stage->widget(0))) {
+            windowPress.reset();
+            clickTimer->stop();
+            toggleFullscreen();
+        } else {
+            windowPress = WindowPress{global, pos()};
         }
         return true;
     }
-    if (dragSurface && (event->type() == QEvent::MouseButtonPress
-        || event->type() == QEvent::MouseButtonRelease || event->type() == QEvent::MouseButtonDblClick)) {
+    case QEvent::MouseButtonRelease: {
         const auto *mouse = static_cast<QMouseEvent *>(event);
-        if (mouse->button() == Qt::LeftButton) {
-            if (event->type() == QEvent::MouseButtonDblClick) {
-                mousePressed = draggingWindow = false;
-                clickTimer->stop();
-                toggleFullscreen();
-            } else if (event->type() == QEvent::MouseButtonPress) {
-                mousePressed = true;
-                draggingWindow = false;
-                dragStartMouse = mouse->globalPosition().toPoint();
-                dragStartWindow = pos();
-            } else {
-                const bool isClick = mousePressed && !draggingWindow
-                    && (mouse->globalPosition().toPoint() - dragStartMouse).manhattanLength()
-                        < QApplication::startDragDistance();
-                if (watched == video && isClick) {
-                    // Commit a single click only after a double-click has been ruled out.
-                    clickTimer->start(QApplication::doubleClickInterval());
-                }
-                mousePressed = draggingWindow = false;
-            }
-            return true;
-        }
+        if (!windowPress || mouse->button() != Qt::LeftButton) break;
+        const QPoint delta = mouse->globalPosition().toPoint() - windowPress->mouse;
+        if (watched == video && !windowPress->moved && delta.manhattanLength() < QApplication::startDragDistance())
+            clickTimer->start(QApplication::doubleClickInterval());
+        windowPress.reset();
+        return true;
+    }
+    default:
+        break;
     }
     return QMainWindow::eventFilter(watched, event);
 }

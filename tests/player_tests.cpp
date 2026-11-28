@@ -2227,6 +2227,56 @@ private slots:
         QCOMPARE(player->playbackState(), QMediaPlayer::PlayingState);
         QCOMPARE(states.count(), 0);
     }
+    void draggingBackgroundsSkipsControls() {
+        PlayerWindow window;
+        window.show();
+        auto *page = window.centralWidget();
+        auto *controls = window.findChild<QWidget *>("controlsPanel");
+        auto *empty = window.findChild<QWidget *>("emptyStage");
+        auto *timeline = window.findChild<SeekSlider *>("timeline");
+        auto *volume = window.findChild<SeekSlider *>("volume");
+        auto *readout = window.findChild<QLabel *>("volumeReadout");
+        auto *filesButton = window.findChild<QAbstractButton *>("folderFilesButton");
+        auto *panel = window.findChild<FolderPanel *>();
+        auto *list = window.findChild<QListWidget *>("folderFiles");
+        QVERIFY(page && controls && empty && timeline && volume && readout && filesButton && panel && list);
+
+        const QPoint delta(70, 50);
+        const auto checkDrag = [&](QWidget *surface, const QPoint &local, bool movesWindow) {
+            const QPoint origin = window.pos();
+            const QPoint global = surface->mapToGlobal(local);
+            QMouseEvent press(QEvent::MouseButtonPress, local, global,
+                Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(surface, &press);
+            QMouseEvent drag(QEvent::MouseMove, local + delta, global + delta,
+                Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(surface, &drag);
+            QCOMPARE(window.pos(), movesWindow ? origin + delta : origin);
+            QMouseEvent release(QEvent::MouseButtonRelease, surface->mapFromGlobal(global + delta), global + delta,
+                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(surface, &release);
+            window.move(origin);
+        };
+
+        checkDrag(empty, QPoint(2, 2), true);
+        checkDrag(page, QPoint(2, page->height() - 3), true);
+        checkDrag(controls, QPoint(2, controls->height() / 2), true);
+        QVERIFY(!timeline->isEnabled());
+        checkDrag(controls, timeline->mapTo(controls, timeline->rect().center()), false);
+        checkDrag(readout, readout->rect().center(), false);
+
+        const int originalVolume = volume->value();
+        QSignalSpy volumeChanges(volume, &QSlider::valueChanged);
+        checkDrag(volume, volume->rect().center(), false);
+        QVERIFY(!volumeChanges.isEmpty());
+        volume->setValue(originalVolume);
+
+        checkDrag(filesButton, filesButton->rect().center(), false);
+        QTest::mouseClick(filesButton, Qt::LeftButton);
+        QVERIFY(panel->isVisible());
+        checkDrag(panel, QPoint(2, panel->height() / 2), true);
+        checkDrag(list->viewport(), list->viewport()->rect().center(), false);
+    }
     void resizeDiagnostics() {
         if (!qEnvironmentVariableIsSet("VIDEO_PLAYER_RESIZE_BENCHMARK"))
             QSKIP("Opt-in native resize diagnostic");
