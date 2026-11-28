@@ -2693,6 +2693,92 @@ private slots:
         QCOMPARE(player.videoSink(), video.videoSink());
         QCOMPARE(video.videoSink()->videoFrame().toImage(), frame.toImage());
     }
+    void videoDecodingSwitch() {
+        const QString setting = "video/softwareDecoding";
+        const QVariant previous = QSettings().value(setting);
+        const auto restore = qScopeGuard([&] {
+            if (previous.isValid()) QSettings().setValue(setting, previous);
+            else QSettings().remove(setting);
+        });
+        QSettings().setValue(setting, false);
+        PlayerWindow window;
+        auto *video = window.findChild<VideoSurface *>();
+        auto *button = window.findChild<QAbstractButton *>("videoDecodingButton");
+        auto *files = window.findChild<QAbstractButton *>("folderFilesButton");
+        auto *readout = window.findChild<QLabel *>("timeReadout");
+        auto *volumeLabel = window.findChild<QLabel *>("volumeReadout");
+        QVERIFY(video && button && files && readout && volumeLabel);
+
+        window.resize(window.minimumSize());
+        window.show();
+        const QString example = qEnvironmentVariable("VIDEO_PLAYER_DECODING_SWITCH_EXAMPLE");
+        window.openFile(example.isEmpty() ? clip : example);
+        auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
+        auto *gamma = window.findChild<QSlider *>("gamma");
+        QTRY_VERIFY(player->isPlaying() && video->videoSink()->videoFrame().isValid());
+        const qint64 interval = example.isEmpty() ? 100 : 2000;
+        const qint64 initialPosition = player->position();
+        QTRY_VERIFY(player->position() > initialPosition + interval);
+        QVERIFY(!readout->wordWrap());
+        QCOMPARE_LE(readout->fontMetrics().horizontalAdvance(readout->text()), readout->width());
+        QVERIFY(readout->geometry().right() < button->geometry().left());
+        QVERIFY(button->geometry().right() < files->geometry().left());
+        QVERIFY(files->geometry().right() < volumeLabel->geometry().left());
+        QCOMPARE(button->geometry().center().y(), files->geometry().center().y());
+        QVERIFY(button->parentWidget()->rect().contains(button->geometry()));
+        QVERIFY(files->parentWidget()->rect().contains(files->geometry()));
+        player->pause();
+        QTest::qWait(150);
+        QCOMPARE(button->text(), QString("GPU"));
+        gamma->setValue(16);
+        auto *const renderer = video->quickView();
+        auto *const sink = player->videoSink();
+        const qint64 position = player->position();
+        const auto originalFrame = sink->videoFrame();
+        QVERIFY(originalFrame.isValid());
+
+        for (const bool software : {true, false}) {
+            QTest::mouseClick(button, Qt::LeftButton);
+            QCOMPARE(button->text(), QString(software ? "CPU" : "GPU"));
+            const QString savedSettings = temp.filePath(software ? "cpu-settings.ini" : "gpu-settings.ini");
+            QVERIFY(QFile::copy(QSettings().fileName(), savedSettings));
+            QCOMPARE(QSettings(savedSettings, QSettings::IniFormat).value(setting, !software).toBool(), software);
+            QCOMPARE(video->quickView(), renderer);
+            QCOMPARE(player->videoSink(), sink);
+            QCOMPARE(sink->property("videoPlayerSoftwareDecoding").toBool(), software);
+            QCOMPARE(player->playbackState(), QMediaPlayer::PausedState);
+            QCOMPARE(player->position(), position);
+            QCOMPARE(gamma->value(), 16);
+        }
+        QTRY_VERIFY(video->videoSink()->videoFrame().isValid());
+        QCOMPARE_LE(qAbs(video->videoSink()->videoFrame().startTime() - originalFrame.startTime()), 50000);
+        player->play();
+        QTRY_VERIFY(player->position() > position + interval);
+        for (const bool software : {true, false}) {
+            const QString mode = software ? "CPU" : "GPU";
+            const qint64 playingPosition = player->position();
+            QTest::mouseClick(button, Qt::LeftButton);
+            QCOMPARE(button->text(), mode);
+            QCOMPARE(video->quickView(), renderer);
+            QCOMPARE(player->videoSink(), sink);
+            QVERIFY(player->isPlaying());
+            QTRY_VERIFY(player->position() > playingPosition + interval);
+            PlayerWindow reopened;
+            QCOMPARE(reopened.findChild<QAbstractButton *>("videoDecodingButton")->text(), mode);
+        }
+
+        const QString otherClip = temp.filePath("decoder-preference.mp4");
+        QVERIFY(QFile::copy(clip, otherClip));
+        for (const bool software : {true, false}) {
+            QTest::mouseClick(button, Qt::LeftButton);
+            const QString path = software ? otherClip : clip;
+            window.openFile(path);
+            QTRY_VERIFY(player->isPlaying());
+            QCOMPARE(player->source(), QUrl::fromLocalFile(path));
+            QCOMPARE(button->text(), QString(software ? "CPU" : "GPU"));
+            QCOMPARE(player->videoSink()->property("videoPlayerSoftwareDecoding").toBool(), software);
+        }
+    }
     void gpuDownscalePlayback() {
         const QString example = qEnvironmentVariable("VIDEO_PLAYER_GPU_SCALE_EXAMPLE");
         if (example.isEmpty()) QSKIP("Set VIDEO_PLAYER_GPU_SCALE_EXAMPLE to a 4K SDR video");
@@ -2884,6 +2970,11 @@ private slots:
         auto *player = window.findChild<QMediaPlayer *>("mediaPlayer");
         auto *video = window.findChild<VideoSurface *>();
         QTRY_VERIFY_WITH_TIMEOUT(player->isPlaying(), 15000);
+        const int playMs = qEnvironmentVariableIntValue("VIDEO_PLAYER_AV1_PLAY_MS");
+        if (playMs > 0) {
+            const qint64 target = player->position() + playMs;
+            QTRY_VERIFY_WITH_TIMEOUT(player->position() >= target, playMs + 5000);
+        }
         player->pause();
         const auto frame = video->videoSink()->videoFrame();
         QVERIFY(frame.isValid());

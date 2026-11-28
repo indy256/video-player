@@ -310,6 +310,7 @@ protected:
 };
 
 constexpr int timelineSteps = 1000000;
+constexpr char softwareDecodingSetting[] = "video/softwareDecoding";
 
 qint64 positionAtFraction(qint64 duration, int part, int total) {
     return qRound64(double(duration) * part / total);
@@ -384,6 +385,9 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     emptyLayout->addStretch();
     stage->addWidget(empty);
     video = new VideoSurface;
+    const QSettings settings;
+    video->setSoftwareDecoding(settings.value(softwareDecodingSetting,
+        !settings.value("video/gpuRendering", true).toBool()).toBool());
     clickTimer = new QTimer(this);
     clickTimer->setSingleShot(true);
     clickTimer->setTimerType(Qt::PreciseTimer);
@@ -448,28 +452,33 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     controls->setContentsMargins(12, 0, 12, 0);
     controls->setHorizontalSpacing(16);
     controls->setVerticalSpacing(4);
-    controls->setColumnStretch(0, 1);
+    controls->setColumnStretch(0, 4);
+    constexpr int controlWidth = 100;
     const auto addSlider = [this, controls](const QString &name, const QString &title, int column) {
         auto *slider = new SeekSlider;
         slider->setObjectName(name);
         slider->setAccessibleName(title);
-        if (column > 0) slider->setFixedWidth(100);
+        if (column > 0) {
+            slider->setMaximumWidth(controlWidth);
+            controls->setColumnStretch(column, 1);
+        }
         slider->installEventFilter(this);
         controls->addWidget(slider, 0, column, Qt::AlignVCenter);
         return slider;
     };
-    const auto addReadout = [controls](const QString &name, const QString &text, int column,
-                                     Qt::Alignment alignment = Qt::AlignCenter) {
+    const auto addReadout = [controls](const QString &name, const QString &text, int column) {
         auto *label = new QLabel(text);
         label->setObjectName(name + "Readout");
-        label->setAlignment(alignment);
+        label->setAlignment(Qt::AlignCenter);
+        label->setMaximumWidth(controlWidth);
         controls->addWidget(label, 1, column);
         return label;
     };
     timeline = addSlider("timeline", "Video position", 0);
     timeline->setRange(0, timelineSteps);
     timeline->setToolTip("Click or drag to seek");
-    timeLabel = addReadout("time", {}, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    timeLabel = new QLabel;
+    timeLabel->setObjectName("timeReadout");
     timeLabel->setAccessibleName("Current and total time, video codec and resolution");
     volume = addSlider("volume", "Volume", 1);
     volume->setSingleStep(5);
@@ -509,11 +518,33 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
     auto *filesButton = new QPushButton("List");
     filesButton->setObjectName("folderFilesButton");
     filesButton->setCheckable(true);
-    filesButton->setFocusPolicy(Qt::NoFocus);
     filesButton->setToolTip("Show/hide folder files (L)");
     filesButton->setAccessibleName("Show/hide folder files");
-    controls->addWidget(filesButton, 0, 4, Qt::AlignVCenter);
     connect(filesButton, &QPushButton::toggled, folderPanel, &QWidget::setVisible);
+    auto *decodingButton = new QPushButton;
+    decodingButton->setObjectName("videoDecodingButton");
+    const auto updateDecodingButton = [decodingButton](bool software) {
+        decodingButton->setText(software ? "CPU" : "GPU");
+        decodingButton->setAccessibleName(decodingButton->text() + " video decoding");
+        decodingButton->setToolTip(software ? "Enable hardware video decoding when supported"
+                                           : "Switch to CPU video decoding");
+    };
+    connect(decodingButton, &QPushButton::clicked, this, [this, updateDecodingButton] {
+        const bool software = !video->usesSoftwareDecoding();
+        QSettings settings;
+        settings.setValue(softwareDecodingSetting, software);
+        settings.sync();
+        video->setSoftwareDecoding(software);
+        updateDecodingButton(software);
+    });
+    updateDecodingButton(video->usesSoftwareDecoding());
+    auto *videoReadout = new QHBoxLayout;
+    videoReadout->setSpacing(8);
+    videoReadout->addWidget(timeLabel);
+    videoReadout->addWidget(decodingButton);
+    videoReadout->addWidget(filesButton);
+    videoReadout->addStretch();
+    controls->addLayout(videoReadout, 1, 0);
     connect(gamma, &QSlider::valueChanged, this, [gammaLabel, this](int value) {
         const QString text = QString("Gamma %1").arg(value / 10.0, 0, 'f', 1);
         gammaLabel->setText(text);
@@ -536,7 +567,7 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QWidget#emptyStage { background: #000000; border: 1px solid #252b3a; border-radius: 12px; }
         QWidget#emptyStage QLabel { background: transparent; border: none; }
         QPushButton { background: #242b3b; color: #e4eaf8; border: 1px solid #333e53; border-radius: 7px; padding: 9px 16px; }
-        QPushButton#folderFilesButton { padding: 0 12px; }
+        QPushButton#folderFilesButton, QPushButton#videoDecodingButton { padding: 0 12px; }
         QPushButton:hover { background: #33415b; }
         QPushButton:checked { background: #33415b; border-color: #759eff; }
         QPushButton:focus { border-color: #94b4ff; }
@@ -548,7 +579,11 @@ PlayerWindow::PlayerWindow(QWidget *parent) : QMainWindow(parent) {
         QToolTip { background: #242b3b; color: #e4eaf8; border: 1px solid #475575; }
     )");
     volume->ensurePolished();
-    filesButton->setFixedHeight(qRound(volume->sizeHint().height() * 1.5));
+    const int buttonHeight = qRound(volume->sizeHint().height() * 1.5);
+    for (auto *button : {filesButton, decodingButton}) {
+        button->setFocusPolicy(Qt::NoFocus);
+        button->setFixedHeight(buttonHeight);
+    }
     connect(emptyOpen, &QPushButton::clicked, this, &PlayerWindow::chooseFile);
     connect(volume, &QSlider::valueChanged, this, [audio, volumeLabel, this](int value) {
         volumeLabel->setText(QString("Volume %1").arg(value));

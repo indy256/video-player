@@ -124,7 +124,7 @@ jobs:
         uses: msys2/setup-msys2@3c51bf698df1e37b2261f53cb67797b97761185c # v2
         with:
           msystem: MSYS
-          install: make ${{ matrix.msvc-arch == 'x64' && 'mingw-w64-ucrt-x86_64-nasm' || '' }}
+          install: make pkgconf ${{ matrix.msvc-arch == 'x64' && 'mingw-w64-ucrt-x86_64-nasm' || '' }}
 
       - name: Build Qt kit
         if: steps.qt-kit.outputs.cache-hit != 'true'
@@ -142,6 +142,7 @@ jobs:
               '--arch', os.environ['RUNNER_ARCH'].lower(),
           ]
           if os.name == 'nt':
+              subprocess.run([sys.executable, '-m', 'pip', 'install', 'meson==1.10.0'], check=True)
               msys = pathlib.Path(os.environ['MSYS2_LOCATION'])
               os.environ['MSYS2_BASH'] = str(msys / 'usr/bin/bash.exe')
               os.environ['PATH'] += os.pathsep + str(msys / 'ucrt64/bin')
@@ -211,7 +212,8 @@ jobs:
           import os, pathlib, subprocess, sys
           executable = 'build/player_tests.exe' if os.name == 'nt' else 'build/player_tests'
           platform = 'windows' if os.name == 'nt' else 'cocoa' if sys.platform == 'darwin' else 'xcb'
-          command = [executable, 'gpuGammaPlayback', '-platform', platform, '-o', 'build/gpu-gamma-tests.txt,txt']
+          command = [executable, 'gpuGammaPlayback', 'videoDecodingSwitch',
+                     '-platform', platform, '-o', 'build/gpu-gamma-tests.txt,txt']
           if sys.platform.startswith('linux'):
               command = ['xvfb-run', '-a'] + command
               os.environ['QSG_RHI_BACKEND'] = 'opengl'

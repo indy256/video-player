@@ -20,6 +20,7 @@ native AV1 surface pool and synchronize decoder-surface copies to prevent green 
 during playback and seeking. Hardware decoding stays enabled; stock Qt kits require
 one of these patched backends. To check colors, set
 `VIDEO_PLAYER_AV1_EXAMPLE` to an AV1 file and run `player_tests av1Playback -platform windows`.
+Set `VIDEO_PLAYER_AV1_PLAY_MS=2000` to play for two seconds before comparing colors.
 Set `VIDEO_PLAYER_SEEK_EXAMPLE` to a local video with a seek table
 and run `player_tests hardwareSeekingMovieExample -platform windows` to check
 displayed pixels during arrow and timeline seeks, including fullscreen and gamma.
@@ -36,11 +37,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Test
 .\dist\VideoPlayer.exe "C:\Videos\movie.mp4"
 ```
 
-The script builds Qt 6.11.2 and FFmpeg from source the first time and caches the static kit under `.qt-static`. It uses Visual Studio C++ Build Tools and the Windows SDK by default. Install Python 3.12+, CMake, Ninja, and MSYS2. In the MSYS2 shell, run `pacman -S --needed make`. On x64, also install `mingw-w64-ucrt-x86_64-nasm`. The script uses `C:\msys64` by default. For another MSYS2 location, set `MSYS2_BASH` to its `usr\bin\bash.exe` and append its `ucrt64\bin` to `PATH` on x64.
+The script builds Qt 6.11.2 and FFmpeg with dav1d software AV1 decoding from source the first time and caches the static kit under `.qt-static`. It uses Visual Studio C++ Build Tools and the Windows SDK by default. Install Python 3.12+, CMake, Ninja, and MSYS2. Install Meson with `python -m pip install meson==1.10.0`. In the MSYS2 shell, run `pacman -S --needed make pkgconf`. On x64, also install `mingw-w64-ucrt-x86_64-nasm`. The script uses `C:\msys64` by default. For another MSYS2 location, set `MSYS2_BASH` to its `usr\bin\bash.exe` and append its `ucrt64\bin` to `PATH` on x64.
 
-Use `-ToolsRoot` for CMake and Ninja installed outside `C:\Qt\Tools` and `-Jobs` to set build parallelism. `-QtRoot` reuses a static MSVC kit with its FFmpeg SDK under `ffmpeg`. `-Portable` selects the release filename `dist/vp-windows-<arch>.exe`. The executable can be moved and run by itself. For development, Qt Creator can also open `CMakeLists.txt` with a compatible shared Qt 6.5+ kit including Widgets, Multimedia, MultimediaWidgets, Quick, QML, Shader Tools, and Test.
+Use `-ToolsRoot` for CMake and Ninja installed outside `C:\Qt\Tools` and `-Jobs` to set build parallelism. `-QtRoot` reuses a static MSVC kit with its FFmpeg SDK under `ffmpeg`. `-Portable` selects the release filename `dist/vp-windows-<arch>.exe`. The executable can be moved and run by itself. For development, Qt Creator can also open `CMakeLists.txt` with a compatible shared Qt 6.5+ kit including Widgets, Multimedia, Quick, QML, Shader Tools, and Test.
 
-Tests require `ffmpeg` on PATH solely to generate an eight-second video with audio. They exercise actual decoding, seeking and frame timestamps, pause/resume while scrubbing, replay, invalid media, and recovery using the offscreen Qt platform and CPU fallback. CI also runs `gpuGammaPlayback` on each desktop backend (under Xvfb on Linux) to check shader pixels, paused updates, seeking, fullscreen, and runtime fallback.
+Tests use `ffmpeg` on PATH to generate test clips. The Windows portable test uses either `libaom-av1` or `libsvtav1` to generate its AV1 fixture. The tests exercise decoding, seeking and frame timestamps, pause/resume while scrubbing, replay, invalid media, and recovery using the offscreen Qt platform and CPU fallback. CI also runs `gpuGammaPlayback` on each desktop backend (under Xvfb on Linux) to check shader pixels, paused updates, seeking, fullscreen, and runtime fallback.
 
 To check subtitle cycling on a local file with at least two embedded subtitle tracks, set `VIDEO_PLAYER_SUBTITLE_CYCLING_EXAMPLE` to its path and run `build/player_tests.exe subtitleCyclingExample -platform windows` with the Qt DLL directory on PATH. This checks video-frame timing and audio continuity while cycling. Set `VIDEO_PLAYER_SUBTITLE_CYCLING_GAMMA=16` to also exercise gamma correction at 1.6.
 
@@ -50,7 +51,7 @@ To check subtitle cycling on a local file with at least two embedded subtitle tr
 
 Windows downloads are single `.exe` files with Qt, FFmpeg, their required plugins, and the compiler runtime linked in. Launch the executable directly or pass a video filename. It runs without extracting files into `%LOCALAPPDATA%\VideoPlayer\Runtime`. You can delete that cache after closing all instances of an older build that used it. Linux uses an AppImage (Ubuntu 24.04 or newer compatible system) and macOS ships a self-contained `.app` inside a DMG. Operating-system libraries and graphics drivers remain system requirements.
 
-CI checks the Windows executable for non-system runtime imports and tests repeated and concurrent playback from an isolated directory with only Windows system directories on `PATH`. The test verifies that the process runs directly from the copied executable and leaves the Runtime cache untouched. `VideoPlayer --runtime-check <video>` is a headless decoding diagnostic that exits with zero after receiving a video frame and nonzero on failure. The test-only FFmpeg command-line executable generates fixtures and is not shipped with the app.
+CI checks the Windows executable for non-system runtime imports and tests repeated and concurrent software playback of MPEG-4 and AV1 from an isolated directory with only Windows system directories on `PATH`. The test verifies that the process runs directly from the copied executable and leaves the Runtime cache untouched. `VideoPlayer --runtime-check <video>` is a headless decoding diagnostic that exits with zero after receiving a video frame and nonzero on failure. The test-only FFmpeg command-line executable generates fixtures and is not shipped with the app.
 
 For folder or app-bundle deployment, configure with `-DVIDEO_PLAYER_DEPLOY=ON`, build, then run `cmake --install build --prefix package`. With `VIDEO_PLAYER_STATIC_WINDOWS` enabled, this installs the single executable under `bin`.
 
@@ -141,3 +142,5 @@ During dragging, each movement seeks immediately and playback resumes from the l
 The audio offset slider adjusts embedded and external audio in 50 ms steps. Positive values advance the sound and negative values delay it, by up to one second in either direction. Double-click to reset the readout to **Audio in sync**. The player keeps the adjustment when you seek, pause, open another video, or restart the app.
 
 To test GPU gamma on Windows, put the Qt DLL directory on PATH and run `build/player_tests.exe gpuGammaPlayback -platform windows`. Optionally set `VIDEO_PLAYER_GPU_GAMMA_EXAMPLE` to a local video at least four seconds long, for example a 4K H.264 clip. The test uses isolated settings and also checks recovery to the CPU renderer after a simulated shader failure.
+
+The bottom bar's CPU/GPU button switches video decoding at the current position. The player saves the choice for all videos and restores it on launch. CPU mode uses software decoding. GPU mode starts with software decoding while preparing hardware decoding when supported. Drawing uses the renderer available on the system. Switching the decoder requires the patched FFmpeg plugin from the release Qt build.

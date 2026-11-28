@@ -3,7 +3,7 @@
 Requires Python 3.12+, CMake, Ninja, and a native C/C++ toolchain on PATH.
 The Qt video decoder patches also require Git.
 Shared builds use the seed kit's FFmpeg binaries. Static Windows builds compile
-FFmpeg from source and install it alongside the new Qt kit.
+FFmpeg and dav1d from source and install FFmpeg alongside the new Qt kit.
 """
 import argparse
 import hashlib
@@ -23,6 +23,8 @@ FFMPEG = {
     "6.11.2": ("7.1.5", "e3963a50831c985933e1a625ed566ec4c7adb5c012c34fa9f84438e1d61bdacc"),
 }
 FFMPEG_COMPONENTS = {"avcodec": 61, "avformat": 61, "avutil": 59, "swresample": 5, "swscale": 8}
+DAV1D_VERSION = "1.5.5"
+DAV1D_SHA256 = "ca96b1d0ba3f01f55de7231d775892b64994ba061aaeeaaa4f662a390b3abf9e"
 
 
 def run(*args, cwd=None, capture=False):
@@ -133,8 +135,29 @@ def ffmpeg_sdk(args):
     return sdk
 
 
+def build_dav1d(args):
+    name = f"dav1d-{DAV1D_VERSION}"
+    archive = f"{name}.tar.xz"
+    src = source(args.work, archive, f"https://download.videolan.org/pub/videolan/dav1d/{DAV1D_VERSION}/{archive}",
+                 DAV1D_SHA256, name)
+    build = args.work / "dav1d-build"
+    sdk = args.work / "dav1d-sdk"
+    meson = (sys.executable, "-m", "mesonbuild.mesonmain")
+    options = ["--prefix", sdk, "--libdir", "lib", "--default-library", "static", "--buildtype", "release",
+               "-Db_vscrt=mt", "-Denable_tools=false", "-Denable_tests=false"]
+    if args.arch == "arm64":
+        options.append("-Denable_asm=false")
+    if (build / "meson-private/coredata.dat").is_file():
+        options.append("--reconfigure")
+    run(*meson, "setup", build, src, *options)
+    run("ninja", "-C", build, "-j", args.parallel, "install")
+    (sdk / "lib/libdav1d.a").replace(sdk / "lib/dav1d.lib")
+    return sdk
+
+
 def static_ffmpeg_sdk(args):
     src = ffmpeg_source(args)
+    dav1d = build_dav1d(args)
     sdk = args.install / "ffmpeg"
     build = args.work / "ffmpeg-static-build"
     build.mkdir(parents=True, exist_ok=True)
@@ -145,15 +168,16 @@ def static_ffmpeg_sdk(args):
     options = ["--disable-shared", "--enable-static", "--disable-programs", "--disable-doc", "--disable-debug",
                "--disable-avdevice", "--disable-avfilter", "--disable-postproc", "--disable-autodetect",
                "--enable-d3d11va", "--enable-d3d12va", "--enable-dxva2", "--enable-schannel",
-               "--enable-mediafoundation", "--enable-zlib", "--disable-decoder=truemotion1",
+               "--enable-mediafoundation", "--enable-zlib", "--enable-libdav1d", "--pkg-config=pkgconf",
+               "--disable-decoder=truemotion1",
                f"--extra-cflags={zlib_cflags} -DQT_STATIC", f"--extra-ldflags=-libpath:{build.as_posix()}"]
     arch = "aarch64" if args.arch == "arm64" else "x86_64"
     options += ["--toolchain=msvc", f"--arch={arch}"]
-    required_tools = "make nasm"
+    required_tools = "make pkgconf nasm"
     if args.arch == "arm64":
         # Match the stock Windows ARM64 Qt build. Direct3D hardware decoders
         # are available with this configuration.
-        required_tools = "make"
+        required_tools = "make pkgconf"
         options += ["--disable-asm"]
     bash = os.environ.get("MSYS2_BASH", "bash")
     compiler = shutil.which("cl.exe")
@@ -165,7 +189,8 @@ def static_ffmpeg_sdk(args):
         prefix=$(cygpath -u "$3")
         jobs=$4
         required_tools=$5
-        shift 5
+        export PKG_CONFIG_PATH="$(cygpath -u "$6/lib/pkgconfig")"
+        shift 6
         # Keep MSVC's CRT flag out of the assembler's argument list.
         export _CL_="${_CL_-} /MT"
         for tool in $required_tools; do
@@ -186,7 +211,7 @@ def static_ffmpeg_sdk(args):
         export REVISION="$(cat "${configure%/*}/RELEASE")"
         make -j"$jobs" && make install
     ''', "ffmpeg-build", Path(compiler).parent, src / "configure", sdk,
-        args.parallel, required_tools, *options, cwd=build)
+        args.parallel, required_tools, dav1d, *options, cwd=build)
     lib = sdk / "lib"
     for component in FFMPEG_COMPONENTS:
         pc = lib / "pkgconfig" / f"lib{component}.pc"
@@ -195,7 +220,12 @@ def static_ffmpeg_sdk(args):
         (lib / f"lib{component}.a").replace(lib / f"{component}.lib")
         # Qt's FindFFmpeg consumes the -l entries in Libs from this file.
         metadata = re.sub(r"(?<!\S)([\w-]+)\.lib(?=\s|$)", r"-l\1", metadata)
-        pc.write_text(re.sub(r"(?<!\S)-l(?:z|zlib)(?=\s|$)", "", metadata))
+        pc.write_text(re.sub(r"(?<!\S)(?:-libpath:\S+|-l(?:z|zlib|dav1d))(?=\s|$)", "", metadata))
+    # Keep the software decoder inside avcodec for consumers of the static SDK.
+    combined = lib / "avcodec-merged.lib"
+    run(Path(compiler).with_name("lib.exe"), "/NOLOGO", f"/OUT:{combined}", lib / "avcodec.lib",
+        dav1d / "lib/dav1d.lib")
+    combined.replace(lib / "avcodec.lib")
     return sdk
 
 

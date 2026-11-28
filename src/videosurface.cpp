@@ -5,17 +5,63 @@
 #include <QEvent>
 #include <QMediaPlayer>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QQuickItem>
 #include <QQuickView>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QVBoxLayout>
-#include <QVideoWidget>
+#include <QVariant>
+#include <QVideoSink>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+#include <QtMultimedia/private/qmultimediautils_p.h>
+#include <QtMultimedia/private/qvideoframeconverter_p.h>
+#include <QtMultimedia/private/qvideotexturehelper_p.h>
+#endif
+#include <memory>
 #ifdef Q_OS_WIN
 #include "windowsbackground.h"
 #endif
 
 namespace {
+constexpr char softwareDecodingProperty[] = "videoPlayerSoftwareDecoding";
+
+class CpuVideoWidget : public QWidget {
+public:
+    explicit CpuVideoWidget(QWidget *parent) : QWidget(parent) {
+        setAttribute(Qt::WA_OpaquePaintEvent);
+        connect(&sink, &QVideoSink::videoFrameChanged, this, [this] { update(); });
+        connect(&sink, &QVideoSink::subtitleTextChanged, this, [this] { update(); });
+    }
+
+    QVideoSink sink;
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.fillRect(rect(), Qt::black);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        QVideoFrame frame = sink.videoFrame();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+        if (!frame.isValid()) return;
+        // QVideoFrame::paint can use a GPU shader to convert video frames to RGB.
+        const QImage image = qImageFromVideoFrame(frame, qNormalizedFrameTransformation(frame), true);
+        const QSize size = image.size().scaled(this->size(), Qt::KeepAspectRatio);
+        QRect picture(QPoint(), size);
+        picture.moveCenter(rect().center());
+        painter.drawImage(picture, image);
+        const QString subtitle = frame.subtitleText();
+        if (!subtitle.isEmpty()) {
+            QVideoTextureHelper::SubtitleLayout layout;
+            layout.update(size, subtitle);
+            layout.draw(&painter, picture.topLeft());
+        }
+#else
+        frame.paint(&painter, rect(), {});
+#endif
+    }
+};
+
 class VideoView : public QQuickView {
 public:
     VideoView() { setColor(Qt::black); }
@@ -34,33 +80,65 @@ VideoSurface::VideoSurface(QWidget *parent) : QWidget(parent) {
     auto *box = new QVBoxLayout(this);
     box->setContentsMargins(0, 0, 0, 0);
     const QString platform = QApplication::platformName();
-    if (platform == "offscreen" || platform == "minimal"
-        || qEnvironmentVariableIntValue("VIDEO_PLAYER_CPU_GAMMA")
-        || qgetenv("QT_QUICK_BACKEND") == "software"
-        || QQuickWindow::sceneGraphBackend() == "software") {
-        useCpuRenderer();
-        return;
-    }
-    quick = new VideoView;
+    const bool gpuAvailable = platform != "offscreen" && platform != "minimal"
+        && !qEnvironmentVariableIntValue("VIDEO_PLAYER_CPU_GAMMA")
+        && qgetenv("QT_QUICK_BACKEND") != "software"
+        && QQuickWindow::sceneGraphBackend() != "software";
+    if (!gpuAvailable || !useGpuRenderer()) useCpuRenderer();
+}
+
+bool VideoSurface::useGpuRenderer() {
+    auto view = std::make_unique<VideoView>();
+    view->setResizeMode(QQuickView::SizeRootObjectToView);
+    view->setSource(QUrl("qrc:/player/video/Video.qml"));
+    if (view->status() != QQuickView::Ready) return false;
+    auto *output = view->rootObject()->property("videoSink").value<QVideoSink *>();
+    if (!output) return false;
+
+    sink = output;
+    quick = view.release();
     container = QWidget::createWindowContainer(quick, this);
-    quick->setResizeMode(QQuickView::SizeRootObjectToView);
     quick->installEventFilter(this);
     connect(quick, &QQuickWindow::sceneGraphInitialized, this, [this] {
         if (quick && quick->rendererInterface()->graphicsApi() == QSGRendererInterface::Software)
             useCpuRenderer();
     }, Qt::QueuedConnection);
     connect(quick, &QQuickWindow::sceneGraphError, this, [this](auto, const QString &message) {
+        if (!quick) return;
         qWarning().noquote() << "GPU video rendering unavailable:" << message;
         useCpuRenderer();
     }, Qt::QueuedConnection);
-    quick->setSource(QUrl("qrc:/player/video/Video.qml"));
-    if (quick->status() != QQuickView::Ready
-        || !(sink = quick->rootObject()->property("videoSink").value<QVideoSink *>())) {
-        useCpuRenderer();
-        return;
-    }
     connect(quick->rootObject(), SIGNAL(shaderError()), this, SLOT(useCpuRenderer()), Qt::QueuedConnection);
     watchSurface(container);
+    return true;
+}
+
+void VideoSurface::useCpuRenderer() {
+    if (filter) return;
+    const bool softwareDecoding = usesSoftwareDecoding();
+    const QVideoFrame frame = sink ? sink->videoFrame() : QVideoFrame{};
+    const QString subtitle = sink ? sink->subtitleText() : QString{};
+    if (quick) {
+        disconnect(sink, &QVideoSink::videoFrameChanged, this, &VideoSurface::videoFrameChanged);
+        quick->removeEventFilter(this);
+        quick = nullptr;
+        container->removeEventFilter(this);
+        layout()->removeWidget(container);
+        container->hide();
+        container->deleteLater();
+        container = nullptr;
+    }
+    auto *cpu = new CpuVideoWidget(this);
+    sink = &cpu->sink;
+    filter = new GammaFilter(sink, cpu);
+    setSoftwareDecoding(softwareDecoding);
+    if (player) player->setVideoSink(sink);
+    sink->setSubtitleText(subtitle);
+    if (frame.isValid()) sink->setVideoFrame(frame);
+    setGamma(gamma);
+    watchSurface(cpu);
+    cpu->show();
+    if (frame.isValid()) emit videoFrameChanged(sink->videoFrame());
 }
 
 void VideoSurface::watchSurface(QWidget *surface) {
@@ -70,24 +148,13 @@ void VideoSurface::watchSurface(QWidget *surface) {
     connect(sink, &QVideoSink::videoFrameChanged, this, &VideoSurface::videoFrameChanged);
 }
 
-void VideoSurface::useCpuRenderer() {
-    if (filter) return;
-    const QVideoFrame frame = sink ? sink->videoFrame() : QVideoFrame();
-    if (quick) {
-        qWarning("Using CPU gamma fallback");
-        layout()->removeWidget(container);
-        container->hide();
-        container->deleteLater(); // The container owns the QQuickView.
-        container = nullptr;
-        quick = nullptr;
-    }
-    auto *native = new QVideoWidget(this);
-    sink = native->videoSink();
-    filter = new GammaFilter(sink, this);
-    watchSurface(native);
-    if (frame.isValid()) sink->setVideoFrame(frame);
-    if (player) setPlayer(player);
-    native->show();
+bool VideoSurface::usesSoftwareDecoding() const {
+    return sink && sink->property(softwareDecodingProperty).toBool();
+}
+
+void VideoSurface::setSoftwareDecoding(bool enabled) {
+    sink->setProperty(softwareDecodingProperty, enabled);
+    if (filter) filter->input()->setProperty(softwareDecodingProperty, enabled);
 }
 
 void VideoSurface::setPlayer(QMediaPlayer *value) {
@@ -113,7 +180,12 @@ QRect VideoSurface::contentRect() const {
 }
 
 QImage VideoSurface::grabFrame() {
-    return quick ? quick->grabWindow() : sink->videoFrame().toImage();
+    if (quick) return quick->grabWindow();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    return qImageFromVideoFrame(sink->videoFrame(), true);
+#else
+    return sink->videoFrame().toImage();
+#endif
 }
 
 bool VideoSurface::eventFilter(QObject *watched, QEvent *event) {

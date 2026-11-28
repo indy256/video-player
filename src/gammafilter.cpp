@@ -2,6 +2,9 @@
 #include <QImage>
 #include <QMediaPlayer>
 #include <QSignalBlocker>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+#include <QtMultimedia/private/qvideoframeconverter_p.h>
+#endif
 #include <cmath>
 
 GammaFilter::GammaFilter(QVideoSink *output, QObject *parent)
@@ -51,7 +54,11 @@ void GammaFilter::present() {
 
 QVideoFrame GammaFilter::adjustedFrame(const QVideoFrame &original) const {
     if (gammaTenths == 10 || !original.isValid()) return original;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    const QImage image = qImageFromVideoFrame(original, true).convertToFormat(QImage::Format_RGBA8888);
+#else
     const QImage image = original.toImage().convertToFormat(QImage::Format_RGBA8888);
+#endif
     if (image.isNull()) return original;
     // Allocate a separate frame: mapped QVideoFrames share their pixel storage.
     QVideoFrame adjusted(QVideoFrameFormat(image.size(), QVideoFrameFormat::Format_RGBA8888));

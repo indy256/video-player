@@ -1,6 +1,20 @@
 --- a/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegcodeccontext_p.h
 +++ b/src/plugins/multimedia/ffmpeg/playbackengine/qffmpegcodeccontext_p.h
-@@ -59,6 +59,13 @@
+@@ -37,10 +37,12 @@
+         AVFormatContext *formatContext = nullptr;
+         AVRational pixelAspectRatio = { 0, 1 };
+         std::unique_ptr<QFFmpeg::HWAccel> hwAccel;
++        bool softwareOnly = false;
+     };
+ 
+ public:
+-    static QMaybe<CodecContext> create(AVStream *stream, AVFormatContext *formatContext);
++    static QMaybe<CodecContext> create(AVStream *stream, AVFormatContext *formatContext,
++                                       bool softwareOnly);
+ 
+     AVRational pixelAspectRatio(AVFrame *frame) const;
+ 
+@@ -59,6 +61,13 @@
      }
  
  private:
@@ -14,7 +28,7 @@
      enum VideoCodecCreationPolicy {
          Hw,
          Sw,
-@@ -66,6 +73,8 @@
+@@ -66,6 +75,8 @@
  
      static QMaybe<CodecContext> create(AVStream *stream, AVFormatContext *formatContext,
                                         VideoCodecCreationPolicy videoCodecPolicy);
@@ -34,17 +48,27 @@
  
  #include <QtCore/qloggingcategory.h>
  
-@@ -31,15 +31,19 @@
+@@ -26,22 +26,31 @@
+         pixelAspectRatio = av_guess_sample_aspect_ratio(formatContext, stream, nullptr);
+ }
+ 
+-QMaybe<CodecContext> CodecContext::create(AVStream *stream, AVFormatContext *formatContext)
++QMaybe<CodecContext> CodecContext::create(AVStream *stream, AVFormatContext *formatContext,
++                                        bool softwareOnly)
+ {
      if (!stream)
          return { u"Invalid stream"_s };
  
-+    auto fallbackPolicy = Sw;
-     if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+-    if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
 -        auto hwCodec = create(stream, formatContext, Hw);
 -        if (hwCodec)
 -            return hwCodec;
 -
 -        qCInfo(qLcPlaybackEngineCodec) << hwCodec.error();
++    auto fallbackPolicy = Sw;
++    if (softwareOnly)
++        qCDebug(qLcPlaybackEngineCodec) << "Using software-only video decoding";
++    else if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
 +        const bool softwareFirst = VideoDecoderHandoff::prefersSoftwareVideoDecoder();
 +        if (softwareFirst)
 +            qCDebug(qLcPlaybackEngineCodec) << "Trying software decoding first for video startup";
@@ -59,8 +83,12 @@
 +    auto context = create(stream, formatContext, fallbackPolicy);
      if (!context)
          qCWarning(qLcPlaybackEngineCodec) << context.error();
++    else
++        context->d->softwareOnly = softwareOnly;
  
-@@ -57,17 +61,27 @@
+     return context;
+ }
+@@ -57,17 +66,27 @@
                                            VideoCodecCreationPolicy videoCodecPolicy)
  {
      Q_ASSERT(stream);
@@ -91,7 +119,7 @@
  
      if (!decoder)
          return { QString(u"No %1 decoder found").arg(videoCodecPolicy == Hw ? u"HW" : u"SW") };
-@@ -99,7 +113,7 @@
+@@ -99,7 +118,7 @@
          return { u"Unknown codec type"_s };
      }
  
@@ -100,7 +128,7 @@
      if (ret < 0)
          return QStringLiteral("Failed to set FFmpeg codec parameters: %1").arg(err2str(ret));
  
-@@ -118,7 +132,7 @@
+@@ -118,7 +137,7 @@
      if (ret < 0)
          return QStringLiteral("Failed to open FFmpeg codec context: %1").arg(err2str(ret));
  
@@ -216,3 +244,83 @@
      }
  }
  
+--- a/src/plugins/multimedia/ffmpeg/qffmpegplaybackengine_p.h
++++ b/src/plugins/multimedia/ffmpeg/qffmpegplaybackengine_p.h
+@@ -151,6 +151,8 @@
+     void updateActiveVideoOutput(QVideoSink *sink, bool cleanOutput = false);
+ 
+ private:
++    bool eventFilter(QObject *watched, QEvent *event) override;
++    void prepareVideoDecoderChange();
+     void createStreamAndRenderer(QPlatformMediaPlayer::TrackType trackType);
+ 
+     void createDemuxer();
+--- a/src/plugins/multimedia/ffmpeg/qffmpegplaybackengine.cpp
++++ b/src/plugins/multimedia/ffmpeg/qffmpegplaybackengine.cpp
+@@ -12,8 +12,10 @@
+ #include "playbackengine/qffmpegstreamdecoder_p.h"
+ #include "playbackengine/qffmpegsubtitlerenderer_p.h"
+ #include "playbackengine/qffmpegvideorenderer_p.h"
++#include "playbackengine/qffmpegvideodecoderhandoff_p.h"
+ #include "playbackengine/qffmpegaudiorenderer_p.h"
+ 
++#include <qcoreevent.h>
+ #include <qloggingcategory.h>
+ 
+ QT_BEGIN_NAMESPACE
+@@ -395,8 +397,10 @@
+     if (!codecContext) {
+         qCDebug(qLcPlaybackEngine)
+                 << "Create codec for stream:" << streamIndex << "trackType:" << trackType;
++        const bool softwareOnly = trackType == QPlatformMediaPlayer::VideoStream
++                && VideoDecoderHandoff::softwareDecodingRequested(m_videoSink);
+         auto maybeCodecContext = CodecContext::create(m_media.avContext()->streams[streamIndex],
+-                                                      m_media.avContext());
++                                                      m_media.avContext(), softwareOnly);
+ 
+         if (!maybeCodecContext) {
+             emit errorOccured(QMediaPlayer::FormatError,
+@@ -484,13 +488,39 @@
+     if (prev == sink)
+         return;
+ 
++    if (prev)
++        prev->removeEventFilter(this);
++    if (sink)
++        sink->installEventFilter(this);
++
++    const bool decoderChanged = VideoDecoderHandoff::softwareDecodingRequested(prev)
++            != VideoDecoderHandoff::softwareDecodingRequested(sink);
++    if (decoderChanged)
++        prepareVideoDecoderChange();
++
+     updateVideoSinkSize(prev);
+     updateActiveVideoOutput(sink);
+-
+-    if (!sink || !prev) {
+-        // might need some improvements
++    if (decoderChanged || !sink || !prev)
+         forceUpdate();
+-    }
++}
++
++bool PlaybackEngine::eventFilter(QObject *watched, QEvent *event)
++{
++    if (watched == m_videoSink && event->type() == QEvent::DynamicPropertyChange
++        && static_cast<QDynamicPropertyChangeEvent *>(event)->propertyName()
++                == VideoDecoderHandoff::softwareDecodingProperty) {
++        prepareVideoDecoderChange();
++        forceUpdate();
++    }
++    return QObject::eventFilter(watched, event);
++}
++
++void PlaybackEngine::prepareVideoDecoderChange()
++{
++    const auto position = currentPosition(false);
++    m_codecContexts[QPlatformMediaPlayer::VideoStream] = {};
++    m_timeController.sync(m_currentLoopOffset.loopStartTimeUs.asDuration() + position);
++    m_seekPending = true;
+ }
+ 
+ void PlaybackEngine::setAudioSink(QPlatformAudioOutput *output) {

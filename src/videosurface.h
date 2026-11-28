@@ -14,6 +14,8 @@ public:
     QVideoSink *videoSink() const { return sink; }
     QQuickView *quickView() const { return quick; }
     bool usesGpuGamma() const { return quick != nullptr; }
+    bool usesSoftwareDecoding() const;
+    void setSoftwareDecoding(bool enabled);
     void setPlayer(QMediaPlayer *player);
     void setGamma(int tenths);
     QRect contentRect() const;
@@ -25,6 +27,7 @@ protected:
 private slots:
     void useCpuRenderer();
 private:
+    bool useGpuRenderer();
     void watchSurface(QWidget *surface);
     QMediaPlayer *player = nullptr;
     QVideoSink *sink = nullptr;

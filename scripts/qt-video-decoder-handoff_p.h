@@ -4,6 +4,8 @@
 #include <QtFFmpegMediaPluginImpl/private/qffmpegcodeccontext_p.h>
 #include <QtFFmpegMediaPluginImpl/private/qffmpegpacket_p.h>
 #include <QtCore/qthreadpool.h>
+#include <QtCore/qvariant.h>
+#include <QtMultimedia/qvideosink.h>
 
 #include "qffmpegcodecstorage_p.h"
 
@@ -19,6 +21,13 @@ namespace QFFmpeg {
 class VideoDecoderHandoff
 {
 public:
+    static constexpr char softwareDecodingProperty[] = "videoPlayerSoftwareDecoding";
+
+    static bool softwareDecodingRequested(const QVideoSink *sink)
+    {
+        return sink && sink->property(softwareDecodingProperty).toBool();
+    }
+
     static bool prefersSoftwareVideoDecoder()
     {
         return !qEnvironmentVariableIsSet("QT_FFMPEG_DECODING_HW_DEVICE_TYPES");
@@ -41,7 +50,7 @@ public:
     static std::unique_ptr<VideoDecoderHandoff> create(const CodecContext &codec,
                                                       const Options &...options)
     {
-        if (codec.context()->codec_type != AVMEDIA_TYPE_VIDEO || codec.hwAccel()
+        if (codec.context()->codec_type != AVMEDIA_TYPE_VIDEO || codec.hwAccel() || codec.d->softwareOnly
             || !prefersSoftwareVideoDecoder())
             return {};
 
